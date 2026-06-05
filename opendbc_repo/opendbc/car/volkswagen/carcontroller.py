@@ -97,9 +97,13 @@ class MQBStandstillManager:
 
 
 
-    # Uphill launch: apply accel floor so engine torque builds before ESP releases hold
+    # Grade-adaptive accel floor: scales with measured slope so car holds on any grade.
+    # At standstill, CS.out.aEgo approximates -grade*g (gravity pulling backward on uphill).
+    # Floor = gravity component + 0.35 m/s2 margin, capped at 2.5 m/s2.
     if long_active and accel > 0 and self._prev_hold_confirmation and at_standstill:
-      accel = max(accel, self.UPHILL_ACCEL_FLOOR)
+      grade_accel = max(0.0, -CS.out.aEgo)  # gravity component to overcome
+      adaptive_floor = min(2.5, grade_accel * 1.3 + 0.35)  # 30% margin + base
+      accel = max(accel, adaptive_floor)
 
     if hms_active and at_standstill and stopping and not starting:
       if CS.esp_hold_confirmation:
