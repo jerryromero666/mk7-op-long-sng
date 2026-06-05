@@ -37,7 +37,7 @@ X_EGO_COST = 0.
 V_EGO_COST = 0.
 A_EGO_COST = 0.
 J_EGO_COST = 5.
-A_CHANGE_COST = 200.
+A_CHANGE_COST = 75.
 DANGER_ZONE_COST = 100.
 CRASH_DISTANCE = .25
 LEAD_DANGER_FACTOR = 0.75
@@ -54,7 +54,7 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 6.0
+STOP_DISTANCE = 7.5
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
@@ -249,6 +249,8 @@ class LongitudinalMpc:
     self.time_linearization = 0.0
     self.time_integrator = 0.0
     self.x0 = np.zeros(X_DIM)
+    self._last_dRel = 50.0
+    self._lead_dropout_frames = 0
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -294,15 +296,28 @@ class LongitudinalMpc:
     v_ego = self.x0[1]
     if lead is not None and lead.status:
       x_lead = lead.dRel
+      if self._last_dRel < 20.0 and self._last_dRel > 0:
+        max_decrease = max(0.15, v_ego * 0.05 * 1.5)
+        max_increase = 0.5 if lead.vLead < 0.5 else 2.0
+        x_lead = float(np.clip(x_lead, self._last_dRel - max_decrease, self._last_dRel + max_increase))
+      self._last_dRel = x_lead
+      self._lead_dropout_frames = 0
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
-      x_lead = 50.0
-      v_lead = v_ego + 10.0
-      a_lead = 0.0
-      a_lead_tau = _LEAD_ACCEL_TAU
+      self._lead_dropout_frames += 1
+      if self._last_dRel < 25.0 and v_ego > 1.0 and self._lead_dropout_frames <= 10:
+        x_lead = self._last_dRel
+        v_lead = 0.0
+        a_lead = 0.0
+        a_lead_tau = _LEAD_ACCEL_TAU
+      else:
+        x_lead = 50.0
+        v_lead = v_ego + 10.0
+        a_lead = 0.0
+        a_lead_tau = _LEAD_ACCEL_TAU
 
     # MPC will not converge if immediate crash is expected
     # Clip lead distance to what is still possible to brake for

@@ -29,7 +29,7 @@ MAX_HEIGHT_STD = np.exp(-3.5)
 # This is at model frequency, blocks needed for efficiency
 SMOOTH_CYCLES = 10
 BLOCK_SIZE = 100
-INPUTS_NEEDED = 5   # Minimum blocks needed for valid calibration
+INPUTS_NEEDED = 3   # Minimum blocks needed for valid calibration
 INPUTS_WANTED = 50   # We want a little bit more than we need for stability
 MAX_ALLOWED_YAW_SPREAD = np.radians(2)
 MAX_ALLOWED_PITCH_SPREAD = np.radians(4)
@@ -43,6 +43,7 @@ if HARDWARE.get_device_type() == 'mici':
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])
 YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
+FIXED_PITCH = 0.0236  # hard-locked pitch for non-standard mount
 DEBUG = os.getenv("DEBUG") is not None
 
 
@@ -141,6 +142,8 @@ class Calibrator:
       self.height = np.mean(self.heights[valid_idxs], axis=0)
       rpys = self.rpys[valid_idxs]
       self.rpy = np.mean(rpys, axis=0)
+      self.rpy[1] = FIXED_PITCH  # enforce fixed pitch
+      self.rpy[2] = -0.0070  # locked yaw
       max_rpy_calib = np.array(np.max(rpys, axis=0))
       min_rpy_calib = np.array(np.min(rpys, axis=0))
       self.calib_spread = np.abs(max_rpy_calib - min_rpy_calib)
@@ -204,6 +207,8 @@ class Calibrator:
                              np.arctan2(trans[1], trans[0])])
     new_rpy = euler_from_rot(rot_from_euler(self.get_smooth_rpy()).dot(rot_from_euler(observed_rpy)))
     new_rpy = sanity_clip(new_rpy)
+    new_rpy[1] = FIXED_PITCH  # never calibrate pitch
+    new_rpy[2] = -0.0070  # locked yaw for off-center mount
 
     if len(wide_from_device_euler) == 3:
       new_wide_from_device_euler = np.array(wide_from_device_euler)
@@ -240,6 +245,8 @@ class Calibrator:
     liveCalibration.validBlocks = self.valid_blocks
     liveCalibration.calStatus = self.cal_status
     liveCalibration.calPerc = min(100 * (self.valid_blocks * BLOCK_SIZE + self.idx) // (INPUTS_NEEDED * BLOCK_SIZE), 100)
+    smooth_rpy[1] = FIXED_PITCH
+    smooth_rpy[2] = -0.0070
     liveCalibration.rpyCalib = smooth_rpy.tolist()
     liveCalibration.rpyCalibSpread = self.calib_spread.tolist()
     liveCalibration.wideFromDeviceEuler = self.wide_from_device_euler.tolist()
