@@ -222,9 +222,12 @@ class CarController(CarControllerBase):
           long_active, accel, stopping, starting, esp_starting_override, esp_stopping_override = \
             self.standstill_manager.update(CS, CC.longActive, accel, stopping, starting)
 
-        acc_control = self.CCS.acc_control_value(CS.out.cruiseState.available, CS.out.accFaulted, long_active)
+        # Use CC.longActive for HMS signaling — returned long_active may be False from brakePressed
+        # which would force HMS=0 and prevent hill hold from engaging via SRBM accumulation
+        long_active_hms = CC.longActive if (self.CCS == mqbcan and CS.acc_type == 1) else long_active
+        acc_control = self.CCS.acc_control_value(CS.out.cruiseState.available, CS.out.accFaulted, long_active_hms)
 
-        can_sends.extend(self.CCS.create_acc_accel_control(self.packer_pt, self.CAN.pt, CS.acc_type, long_active, accel,
+        can_sends.extend(self.CCS.create_acc_accel_control(self.packer_pt, self.CAN.pt, CS.acc_type, long_active_hms, accel,
                                                            acc_control, stopping, starting, CS.esp_hold_confirmation,
                                                            esp_starting_override, esp_stopping_override))
 
