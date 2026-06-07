@@ -105,13 +105,6 @@ class MQBStandstillManager:
       adaptive_floor = min(2.5, grade_accel * 1.3 + 0.35)  # 30% margin + base
       accel = max(accel, adaptive_floor)
 
-    # If hold not yet acquired at standstill, force stopping branch so HMS=1
-    # is sent before any departure signal. Prevents grade-adaptive accel floor
-    # from triggering starting=True (lcs=pid) and skipping hold request entirely.
-    if at_standstill and hms_active and not self._hold_acquired and not CS.esp_hold_confirmation:
-      stopping = True
-      starting = False
-
     if hms_active and at_standstill and stopping and not starting:
       if CS.esp_hold_confirmation:
         # State 2: HOLDING — standby, never fight active hold → HMS=3
@@ -137,9 +130,9 @@ class MQBStandstillManager:
         if self._hold_lost_frames >= 30:
           self._hold_acquired = False
           self._hold_lost_frames = 0
-          self._hold_request_frames = self.HOLD_REQUEST_TIMEOUT
-          # skip REQUESTING, fall directly into TIMEOUT (HMS=4) — prevents SRBM
-          # accumulation when hold was briefly acquired then lost on moderate grades
+          self._hold_request_frames = 0
+          # reset fully — allow fresh REQUESTING (HMS=1) cycle to re-establish hold
+          # previously used HOLD_REQUEST_TIMEOUT which caused permanent HMS=4 → SRBM
         else:
           esp_starting_override = True
           esp_stopping_override = False
