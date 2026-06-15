@@ -39,7 +39,7 @@ class CameraOffsetHelper:
       v_ego = sm['carState'].vEgo
     except Exception:
       v_ego = 0.0
-    speed_yaw = float(np.clip(v_ego / 35.0, 0.0, 1.0) * -0.0055)
+    speed_yaw = float(np.clip(v_ego / 35.0, 0.0, 1.0) * -0.0030)
     intrinsics_main = dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics
     model_transform_main = self.apply_camera_offset(model_transform_main, intrinsics_main, height, self.actual_camera_offset)
     model_transform_main = self.apply_yaw_correction(model_transform_main, intrinsics_main, speed_yaw)
