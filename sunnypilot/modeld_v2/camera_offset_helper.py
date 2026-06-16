@@ -39,10 +39,11 @@ class CameraOffsetHelper:
       v_ego = sm['carState'].vEgo
     except Exception:
       v_ego = 0.0
-    # Quadratic ramp: gentle at 60mph (curve-safe), stronger at 75mph+ where left drift concentrates.
-    # norm^2 keeps low-speed correction small while boosting high-speed correction.
-    _norm = float(np.clip(v_ego / 35.0, 0.0, 1.0))
-    speed_yaw = (_norm ** 2) * -0.0075
+    # Linear ramp with offset floor: corrects the persistent ~0.29m left bias.
+    # Starts correcting at 13 m/s (29mph), full by 31 m/s (70mph) where bias peaks.
+    # Linear (not quadratic) because the left bias is strongest at 60-70mph, not just top speed.
+    _norm = float(np.clip((v_ego - 13.0) / 18.0, 0.0, 1.0))
+    speed_yaw = _norm * -0.0090
     intrinsics_main = dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics
     model_transform_main = self.apply_camera_offset(model_transform_main, intrinsics_main, height, self.actual_camera_offset)
     model_transform_main = self.apply_yaw_correction(model_transform_main, intrinsics_main, speed_yaw)
