@@ -42,7 +42,7 @@ class CameraOffsetHelper:
     # Quadratic ramp: gentle at 60mph (curve-safe), stronger at 75mph+ where left drift concentrates.
     # norm^2 keeps low-speed correction small while boosting high-speed correction.
     _norm = float(np.clip(v_ego / 35.0, 0.0, 1.0))
-    speed_yaw = (_norm ** 2) * -0.0052
+    speed_yaw = (_norm ** 2) * -0.0075
     intrinsics_main = dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics
     model_transform_main = self.apply_camera_offset(model_transform_main, intrinsics_main, height, self.actual_camera_offset)
     model_transform_main = self.apply_yaw_correction(model_transform_main, intrinsics_main, speed_yaw)
