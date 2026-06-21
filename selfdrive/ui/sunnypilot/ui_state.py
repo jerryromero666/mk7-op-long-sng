@@ -53,7 +53,7 @@ class UIStateSP:
     if _ui_state.sm.recv_frame["carState"] < _ui_state.started_frame:
       return
 
-    has_alert = _ui_state.started and self.onroad_brightness != OnroadBrightness.AUTO and alert is not None
+    has_alert = False  # disabled: no alert-triggered screen wake
 
     self.update_onroad_brightness(has_alert)
     if has_alert:

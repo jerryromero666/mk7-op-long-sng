@@ -46,7 +46,7 @@ class CircularAlertsRenderer:
     if self._green_light_alert or self._lead_depart_alert:
       self._e2e_alert_display_timer = 3 * gui_app.target_fps
       # reset onroad sleep timer for e2e alerts
-      ui_state.reset_onroad_sleep_timer()
+      pass  # disabled: no screen wake on e2e alert
 
     if self._e2e_alert_display_timer > 0:
       self._e2e_alert_frame += 1
