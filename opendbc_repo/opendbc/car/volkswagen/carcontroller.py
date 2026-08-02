@@ -97,20 +97,33 @@ class MQBStandstillManager:
 
 
 
-    # Grade-adaptive accel floor: scales with measured slope so car holds on any grade.
-    # At standstill, CS.out.aEgo approximates -grade*g (gravity pulling backward on uphill).
-    # Floor = gravity component + 0.35 m/s2 margin, capped at 2.5 m/s2.
-    # NOTE: this car's ESP never confirms hold (esp_hold_confirmation always False), so the
-    # taper must NOT depend on _prev_hold_confirmation or it never runs. It holds the car on
-    # engine torque instead of a brake-hold request, which also avoids SRBM accumulation
-    # (sustained braking accel at standstill accrues SRBM -> TSK fault on long grade stops).
-    on_grade = abs(CS.out.aEgo) > 0.3  # ~3% grade; below this let normal stopping brake hold
-    if long_active and at_standstill and on_grade:
+    # Grade-adaptive powertrain hold. This car's ESP never confirms hold
+    # (esp_hold_confirmation always False in 45k+ frames), so the HMS request/confirm
+    # handshake is dead — the car's normal resting state is a steady HMS=0, which runs
+    # fault-free (confirmed: 11,461 grade frames, zero faults on clean drives).
+    #
+    # On a grade we hold with engine torque (positive accel) instead of a brake-hold
+    # request. CRITICAL: when this hold engages it must FULLY OWN standstill and the HMS
+    # machine must be SUPPRESSED. If the taper commands positive accel (-> pid/starting ->
+    # HMS=4) while the stopping machine still requests HMS=1/stopping, HMS chatters 0<->4
+    # at 50Hz and the ESP hard-faults (TSK=7). So powertrain_hold forces stopping=False,
+    # starting=False, and steady HMS=0 (no overrides) — one owner, no contradiction.
+    powertrain_hold = long_active and at_standstill and abs(CS.out.aEgo) > 0.3
+    if powertrain_hold:
       grade_accel = max(0.0, -CS.out.aEgo)  # gravity component to overcome
       adaptive_floor = min(2.5, grade_accel * 1.3 + 0.35)  # 30% margin + base
       accel = max(accel, adaptive_floor)
+      stopping = False   # stop requesting ESP brake-hold (ACC_Anhalten)
+      starting = False   # don't signal departure either — steady rest
 
-    if hms_active and at_standstill and stopping and not starting:
+    if powertrain_hold:
+      # Powertrain hold owns standstill: no HMS overrides, HMS stays 0 (car's rest state).
+      esp_starting_override = None
+      esp_stopping_override = None
+      self._hold_request_frames = 0
+      self._hold_acquired = False
+      self._hold_lost_frames = 0
+    elif hms_active and at_standstill and stopping and not starting:
       if CS.esp_hold_confirmation:
         # State 2: HOLDING — standby, never fight active hold → HMS=3
         esp_starting_override = False
