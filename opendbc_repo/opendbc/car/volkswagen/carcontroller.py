@@ -100,7 +100,12 @@ class MQBStandstillManager:
     # Grade-adaptive accel floor: scales with measured slope so car holds on any grade.
     # At standstill, CS.out.aEgo approximates -grade*g (gravity pulling backward on uphill).
     # Floor = gravity component + 0.35 m/s2 margin, capped at 2.5 m/s2.
-    if long_active and accel > 0 and self._prev_hold_confirmation and at_standstill:
+    # NOTE: this car's ESP never confirms hold (esp_hold_confirmation always False), so the
+    # taper must NOT depend on _prev_hold_confirmation or it never runs. It holds the car on
+    # engine torque instead of a brake-hold request, which also avoids SRBM accumulation
+    # (sustained braking accel at standstill accrues SRBM -> TSK fault on long grade stops).
+    on_grade = abs(CS.out.aEgo) > 0.3  # ~3% grade; below this let normal stopping brake hold
+    if long_active and at_standstill and on_grade:
       grade_accel = max(0.0, -CS.out.aEgo)  # gravity component to overcome
       adaptive_floor = min(2.5, grade_accel * 1.3 + 0.35)  # 30% margin + base
       accel = max(accel, adaptive_floor)
