@@ -13,7 +13,7 @@ from openpilot.selfdrive.ui.feedback.feedbackd import FEEDBACK_MAX_DURATION
 from openpilot.system.hardware import HARDWARE
 
 from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Priority, ET, Alert, \
-  NoEntryAlert, SoftDisableAlert, UserSoftDisableAlert, ImmediateDisableAlert, EngagementAlert, NormalPermanentAlert, \
+  NoEntryAlert, SoftDisableAlert, UserSoftDisableAlert, SilentUserSoftDisableAlert, ImmediateDisableAlert, SilentImmediateDisableAlert, EngagementAlert, NormalPermanentAlert, \
   StartupAlert, AlertCallbackType, wrong_car_mode_alert
 
 
@@ -66,6 +66,16 @@ def user_soft_disable_alert(alert_text_2: str) -> AlertCallbackType:
     if soft_disable_time < int(0.5 / DT_CTRL):
       return ImmediateDisableAlert(alert_text_2)
     return UserSoftDisableAlert(alert_text_2)
+  return func
+
+
+def silent_user_soft_disable_alert(alert_text_2: str) -> AlertCallbackType:
+  # Same soft-disable behavior as user_soft_disable_alert, but with no alarm sound.
+  # Used for wrongGear so intentional neutral coasting disengages quietly.
+  def func(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+    if soft_disable_time < int(0.5 / DT_CTRL):
+      return SilentImmediateDisableAlert(alert_text_2)
+    return SilentUserSoftDisableAlert(alert_text_2)
   return func
 
 def startup_master_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
@@ -625,7 +635,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.wrongGear: {
-    ET.SOFT_DISABLE: user_soft_disable_alert("Gear not D"),
+    ET.SOFT_DISABLE: silent_user_soft_disable_alert("Gear not D"),
     ET.NO_ENTRY: NoEntryAlert("Gear not D"),
   },
 

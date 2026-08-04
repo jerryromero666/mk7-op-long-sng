@@ -208,12 +208,31 @@ class UserSoftDisableAlert(SoftDisableAlert):
     self.alert_text_1 = "openpilot will disengage"
 
 
+# Silent soft-disable: same disengage BEHAVIOR as UserSoftDisableAlert, but no alarm sound.
+# Used for wrongGear so intentional neutral coasting doesn't trigger the warningSoft alarm.
+# OP still disengages exactly as before — only the audible alert is suppressed.
+class SilentUserSoftDisableAlert(SoftDisableAlert):
+  def __init__(self, alert_text_2: str):
+    super().__init__(alert_text_2)
+    self.alert_text_1 = "openpilot will disengage"
+    self.audible_alert = AudibleAlert.none
+
+
 class ImmediateDisableAlert(Alert):
   def __init__(self, alert_text_2: str):
     super().__init__("TAKE CONTROL IMMEDIATELY", alert_text_2,
                      AlertStatus.critical, AlertSize.full,
                      Priority.HIGHEST, VisualAlert.steerRequired,
                      AudibleAlert.warningImmediate, 4.),
+
+
+# Silent immediate-disable: same behavior as ImmediateDisableAlert, no alarm sound.
+class SilentImmediateDisableAlert(Alert):
+  def __init__(self, alert_text_2: str):
+    super().__init__("TAKE CONTROL IMMEDIATELY", alert_text_2,
+                     AlertStatus.critical, AlertSize.full,
+                     Priority.HIGHEST, VisualAlert.steerRequired,
+                     AudibleAlert.none, 4.)
 
 
 class EngagementAlert(Alert):
