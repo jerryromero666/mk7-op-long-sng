@@ -130,15 +130,22 @@ class MQBStandstillManager:
         if self._hold_lost_frames >= 30:
           self._hold_acquired = False
           self._hold_lost_frames = 0
-          self._hold_request_frames = 0
-          # reset fully — allow fresh REQUESTING (HMS=1) cycle to re-establish hold
-          # previously used HOLD_REQUEST_TIMEOUT which caused permanent HMS=4 → SRBM
+          # Do NOT reset _hold_request_frames to 0. On this car the ESP never confirms
+          # hold, so a fresh REQUESTING cycle is just more rejected HMS=1 frames, which
+          # accumulate SRBM until TSK faults (confirmed: HMS 4->1, 13 SRBM frames, TSK=6).
+          # Leaving it at TIMEOUT drops us into the quiet branch below instead.
+          self._hold_request_frames = self.HOLD_REQUEST_TIMEOUT
         else:
-          esp_starting_override = True
+          # Hold was briefly acquired and just lost: stay quiet (HMS=0) rather than
+          # signaling HMS=4, which accumulates SRBM at standstill on this car.
+          esp_starting_override = False
           esp_stopping_override = False
       elif self._hold_request_frames >= self.HOLD_REQUEST_TIMEOUT:
-        # State 4b: TIMEOUT — hold never came, safe HMS=4 fallback
-        esp_starting_override = True
+        # State 4b: TIMEOUT — ESP never confirmed hold. Go QUIET (HMS=0) rather than
+        # HMS=4. Clean-drive data shows HMS=0 is this car's fault-free resting state
+        # (11,461 grade frames, zero faults), while both HMS=1 and HMS=4 accumulate
+        # SRBM at standstill and eventually trip TSK.
+        esp_starting_override = False
         esp_stopping_override = False
       else:
         # State 1: REQUESTING — no override, allow HMS=1 to request hold from ESP
