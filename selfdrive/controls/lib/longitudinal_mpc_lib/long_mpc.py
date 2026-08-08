@@ -216,9 +216,33 @@ def gen_long_ocp():
 class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
+    self.stop_distance = STOP_DISTANCE
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
+
+  # Live-adjustable stop distance. STOP_DISTANCE is compiled into the acados solver and
+  # cannot be regenerated on-device, so instead of changing the solver we shift the lead
+  # obstacle by the difference: the solver targets its baked STOP_DISTANCE against a
+  # shifted obstacle, so the car physically stops at the chosen distance. Read every
+  # update() so slider changes apply on the next MPC frame with no reboot.
+  STOP_DIST_MIN = 4.0   # vision reports ~0.8m long; below this stops feel too close
+  STOP_DIST_MAX = 8.0   # above ~9.0 the MPC panics (dRel already inside stop zone)
+
+  STOP_DIST_FILE = "/data/stop_distance"
+
+  def _get_stop_distance(self) -> float:
+    # Read from a plain file rather than Params: params_keys.h is compiled into
+    # params_pyx.so which cannot be rebuilt on-device, so new param keys are not
+    # visible at runtime. File is read every update() -> live, no reboot.
+    # Adjust with:  echo 5.5 > /data/stop_distance
+    # Delete the file to return to the compiled default.
+    try:
+      with open(self.STOP_DIST_FILE) as f:
+        v = float(f.read().strip())
+    except (OSError, ValueError):
+      return STOP_DISTANCE
+    return float(np.clip(v, self.STOP_DIST_MIN, self.STOP_DIST_MAX))
 
   def reset(self):
     self.solver.reset()
@@ -339,8 +363,13 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    # Live stop-distance offset. Applied to LEAD obstacles only; cruise_obstacle is left
+    # alone so cruise following distance is unchanged.
+    self.stop_distance = self._get_stop_distance()
+    stop_dist_delta = STOP_DISTANCE - self.stop_distance
+
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) - stop_dist_delta
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) - stop_dist_delta
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
