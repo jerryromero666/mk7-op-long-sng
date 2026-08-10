@@ -77,6 +77,7 @@ class MQBStandstillManager:
     self._hold_request_frames = 0
     self._hold_acquired = False  # latches True once hold confirms; prevents re-requesting
     self._hold_lost_frames = 0   # frames since hold last confirmed; resets _hold_acquired after timeout
+    self._hms4_latched = False   # once HMS=4 at standstill, hold it steady (see update)
 
   def update(self, CS, long_active: bool, accel: float, stopping: bool, starting: bool
              ) -> tuple[bool, float, bool, bool, bool | None, bool | None]:
@@ -105,7 +106,21 @@ class MQBStandstillManager:
       adaptive_floor = min(2.5, grade_accel * 1.3 + 0.35)  # 30% margin + base
       accel = max(accel, adaptive_floor)
 
-    if hms_active and at_standstill and stopping and not starting:
+    # HMS=4 LATCH.
+    # Drive data (0000022b, 5.6% grade) shows the ESP tolerates a long steady HMS=4 --
+    # 60+ frames with ESC_TSK_SRBM_Anf=1 and no complaint. What it will NOT tolerate is
+    # our state machine cycling 4 -> 1 -> 3 -> 4. Each time we send HMS=3 (standby) the
+    # ESP reads it as "release", drops Anf, and re-engages when we go back to 4. After
+    # three such round trips it sets ESC_TSK_SRBM_nicht_verfuegbar and TSK faults.
+    # We move first in every cycle, so this is self-inflicted. Once we reach HMS=4 at
+    # standstill, latch it: no branch may pull us to 1 or 3 until the car departs.
+    if not at_standstill or starting:
+      self._hms4_latched = False
+
+    if hms_active and at_standstill and self._hms4_latched and not starting:
+      esp_starting_override = True
+      esp_stopping_override = False
+    elif hms_active and at_standstill and stopping and not starting:
       if CS.esp_hold_confirmation:
         # State 2: HOLDING — standby, never fight active hold → HMS=3
         esp_starting_override = False
@@ -118,6 +133,7 @@ class MQBStandstillManager:
         esp_starting_override = True
         esp_stopping_override = False
         self._hold_request_frames = 0
+        self._hms4_latched = True   # stay at 4 rather than cycling back through 1/3
       elif self._hold_acquired:
         # State 4a: POST-ACQUISITION — hold was acquired but not currently confirmed
         # Count frames since hold last confirmed. After 100 frames (~2s), reset
@@ -140,6 +156,7 @@ class MQBStandstillManager:
         # State 4b: TIMEOUT — hold never came, safe HMS=4 fallback
         esp_starting_override = True
         esp_stopping_override = False
+        self._hms4_latched = True   # hold 4 steady from here; do not cycle back to 1/3
       else:
         # State 1: REQUESTING — no override, allow HMS=1 to request hold from ESP
         self._hold_request_frames += 1
