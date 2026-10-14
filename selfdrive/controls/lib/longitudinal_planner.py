@@ -17,8 +17,10 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
-A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
-A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
+# Launch: 1.7 (the straight-wheel limit_accel_in_turns ceiling below 20 m/s) held to 6 m/s,
+# back to stock 1.2 at 10 m/s and unchanged above, so merges and cut-ins while accelerating are as before.
+A_CRUISE_MAX_VALS = [1.7, 1.7, 1.2, 0.8, 0.6]
+A_CRUISE_MAX_BP = [0., 6., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
