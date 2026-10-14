@@ -69,7 +69,7 @@ class MQBStandstillManager:
   """
 
   HOLD_REQUEST_TIMEOUT = 20    # frames of HMS=1 before fallback to HMS=4 (~400ms at 50Hz)
-  UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on uphill launch
+  UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
 
   def __init__(self, CCP):
     self._CCP = CCP
@@ -98,13 +98,15 @@ class MQBStandstillManager:
 
 
 
-    # Grade-adaptive accel floor: scales with measured slope so car holds on any grade.
-    # At standstill, CS.out.aEgo approximates -grade*g (gravity pulling backward on uphill).
-    # Floor = gravity component + 0.35 m/s2 margin, capped at 2.5 m/s2.
+    # Launch accel floor: fixed, no grade branching, so behavior is identical on every
+    # incline and decline. Builds engine torque before the ESP releases hold.
+    # Replaces a grade-adaptive floor keyed on CS.out.aEgo, which is noise at standstill
+    # (reads 0.00 on a 5.6% grade, swings +/-1.6 on flat). That floor could also reach
+    # 2.5 m/s2, above the 2.0 panda limit, which blocks the whole ACC_06/ACC_07 frame.
+    # If a grade-aware floor is wanted later, key it on the 0x65F grade, never aEgo.
+    # Clamped to ACCEL_MAX so raising UPHILL_ACCEL_FLOOR can never trip panda safety.
     if long_active and accel > 0 and self._prev_hold_confirmation and at_standstill:
-      grade_accel = max(0.0, -CS.out.aEgo)  # gravity component to overcome
-      adaptive_floor = min(2.5, grade_accel * 1.3 + 0.35)  # 30% margin + base
-      accel = max(accel, adaptive_floor)
+      accel = min(max(accel, self.UPHILL_ACCEL_FLOOR), self._CCP.ACCEL_MAX)
 
     # HMS=4 LATCH.
     # Drive data (0000022b, 5.6% grade) shows the ESP tolerates a long steady HMS=4 --
