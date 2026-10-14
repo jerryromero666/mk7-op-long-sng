@@ -68,7 +68,13 @@ class MQBStandstillManager:
     - Signatures: __init__(CCP) unchanged; CarController uses (CP_SP) and (CC_SP)
   """
 
-  HOLD_REQUEST_TIMEOUT = 20    # frames of HMS=1 before fallback to HMS=4 (~400ms at 50Hz)
+  # 0 = never ask the ESP for its hold (HMS=1); latch HMS=4 as soon as OP is stopping.
+  # Drive logs (routes 332/333): ESP hold confirmation (bit 53) never set on any stop, and the
+  # HMS=1 handoff makes the TSK drop its wheel brake torque to 0 until HMS goes to 4. When the
+  # stopping state starts after the wheels are already at 0 (steep uphill: plan lags), that gap
+  # rolled the car back on +11.2%. With HMS=4 latched, the TSK holds (raw ~120-143, ~1000 Nm)
+  # for 20+ s on every logged stop, more than any road grade needs.
+  HOLD_REQUEST_TIMEOUT = 0
   UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
 
   def __init__(self, CCP):
