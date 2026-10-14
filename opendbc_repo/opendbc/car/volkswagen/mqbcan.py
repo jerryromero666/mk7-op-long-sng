@@ -98,7 +98,7 @@ def create_acc_accel_control(packer, bus, acc_type, acc_enabled, accel, acc_cont
     "ACC_Sollbeschleunigung_02": accel if acc_enabled else 3.01,
     "ACC_zul_Regelabw_unten": 0.2,
     "ACC_zul_Regelabw_oben": 0.2,
-    "ACC_neg_Sollbeschl_Grad_02": 1.0 if acc_enabled else 0,
+    "ACC_neg_Sollbeschl_Grad_02": 4.0 if acc_enabled else 0,  # upstream; 1.0 limits brake build-up to 1 m/s3
     "ACC_pos_Sollbeschl_Grad_02": 4.0 if acc_enabled else 0,
     "ACC_Anfahren": starting if acc_enabled else False,
     "ACC_Anhalten": stopping if acc_enabled else False,
