@@ -80,6 +80,21 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
+# Highway following: standard/relaxed use the aggressive personality's gap and jerk factor at
+# speed and their own in town, so nothing is ever tighter than aggressive. The jerk factor
+# blends first (11-30 mph) so braking onset is quicker before the gap shrinks (30-60 mph).
+# t_follow is a solver parameter (p[4]); COMFORT_BRAKE / STOP_DISTANCE are compiled in.
+HWY_T_FOLLOW_BP = [13.4, 26.8]       # m/s (30, 60 mph)
+HWY_JERK_BP = [5.0, 13.4]            # m/s (11, 30 mph)
+
+def get_T_FOLLOW_at(personality, v_ego):
+  t_follow = get_T_FOLLOW(personality)
+  return float(np.interp(v_ego, HWY_T_FOLLOW_BP, [t_follow, min(t_follow, get_T_FOLLOW(log.LongitudinalPersonality.aggressive))]))
+
+def get_jerk_factor_at(personality, v_ego):
+  jerk_factor = get_jerk_factor(personality)
+  return float(np.interp(v_ego, HWY_JERK_BP, [jerk_factor, min(jerk_factor, get_jerk_factor(log.LongitudinalPersonality.aggressive))]))
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -270,7 +285,7 @@ class LongitudinalMpc:
       self.solver.cost_set(i, 'Zl', Zl)
 
   def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard):
-    jerk_factor = get_jerk_factor(personality)
+    jerk_factor = get_jerk_factor_at(personality, self.x0[1])
     a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
     cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
     constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
@@ -333,8 +348,8 @@ class LongitudinalMpc:
     return lead_xv
 
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
-    t_follow = get_T_FOLLOW(personality)
     v_ego = self.x0[1]
+    t_follow = get_T_FOLLOW_at(personality, v_ego)
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
     lead_xv_0 = self.process_lead(radarstate.leadOne, 0)
