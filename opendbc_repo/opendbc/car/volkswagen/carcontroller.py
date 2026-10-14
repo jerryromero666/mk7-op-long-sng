@@ -69,7 +69,7 @@ class MQBStandstillManager:
   """
 
   HOLD_REQUEST_TIMEOUT = 20    # frames of HMS=1 before fallback to HMS=4 (~400ms at 50Hz)
-  UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
+  UPHILL_ACCEL_FLOOR = 2.0     # m/s² accel floor on launch from confirmed hold (any grade); 2.0 = panda max
 
   def __init__(self, CCP):
     self._CCP = CCP
