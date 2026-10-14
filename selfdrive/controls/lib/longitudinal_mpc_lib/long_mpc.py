@@ -38,6 +38,8 @@ V_EGO_COST = 0.
 A_EGO_COST = 0.
 J_EGO_COST = 5.
 A_CHANGE_COST = 75.
+A_CHANGE_COST_LAUNCH = 40.   # below 3 m/s; blended back to A_CHANGE_COST by 8 m/s
+A_CHANGE_LAUNCH_BP = [3., 8.]  # m/s (7, 18 mph)
 DANGER_ZONE_COST = 100.
 CRASH_DISTANCE = .25
 LEAD_DANGER_FACTOR = 0.75
@@ -271,7 +273,8 @@ class LongitudinalMpc:
 
   def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard):
     jerk_factor = get_jerk_factor(personality)
-    a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
+    a_change_cost = float(np.interp(self.x0[1], A_CHANGE_LAUNCH_BP, [A_CHANGE_COST_LAUNCH, A_CHANGE_COST])) \
+      if prev_accel_constraint else 0
     cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
     constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
     self.set_cost_weights(cost_weights, constraint_cost_weights)
