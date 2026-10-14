@@ -80,6 +80,35 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
+# Speed-tapered stop distance. The solver's stop distance is compiled into c_generated_code
+# at 6.0: STOP_DISTANCE above only reaches the cruise obstacle (the solver was never
+# regenerated after it was raised to 7.5). So the lead obstacles are shifted instead. Shifting
+# an obstacle by +d makes the car settle d metres closer, hence shift = SOLVER - desired.
+# Leads only; the cruise obstacle and the FCW check are untouched. The desired value is
+# slew-limited so a change never looks like lead motion to the MPC, and while stopped it may
+# only grow, so a file edit at a light cannot make the car creep forward (trap #4).
+# Live-tunable: write "<30 mph and below> <60 mph and above>" in metres to /data/stop_distance
+# (e.g. "6.0 4.5"); it is re-read once a second, no reboot.
+SOLVER_STOP_DISTANCE = 6.0           # compiled into c_generated_code (cost and constraint)
+STOP_DIST_TAPER_BP = [13.4, 26.8]    # m/s (30, 60 mph)
+STOP_DIST_TAPER_DEFAULT = (6.0, 4.5) # default when the file is missing or unreadable
+STOP_DIST_FILE = '/data/stop_distance'
+STOP_DIST_LIMITS = (4.5, 9.0)        # above ~9 the lead is inside the stop zone at acquisition
+STOP_DIST_SLEW = 0.04                # m per update (20 Hz)
+LIVE_FILE_PERIOD = 20                # updates between file reads
+
+def read_live_floats(path, default, lo, hi):
+  """Read whitespace-separated floats from a plain file (live tuning, no Params key).
+  Missing/malformed file or wrong count -> default. Each value clamped to [lo, hi]."""
+  try:
+    with open(path) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return default
+  if len(vals) != len(default) or not all(np.isfinite(v) for v in vals):
+    return default
+  return tuple(float(np.clip(v, lo, hi)) for v in vals)
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -217,6 +246,9 @@ class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
+    self._stop_dist_taper = STOP_DIST_TAPER_DEFAULT
+    self._stop_dist = None
+    self._live_cnt = 0
     self.reset()
     self.source = LongitudinalPlanSource.cruise
 
@@ -343,8 +375,18 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    if self._live_cnt % LIVE_FILE_PERIOD == 0:
+      self._stop_dist_taper = read_live_floats(STOP_DIST_FILE, STOP_DIST_TAPER_DEFAULT, *STOP_DIST_LIMITS)
+    self._live_cnt += 1
+    stop_dist_target = float(np.interp(v_ego, STOP_DIST_TAPER_BP, self._stop_dist_taper))
+    if self._stop_dist is None:
+      self._stop_dist = stop_dist_target
+    shrink_limit = 0.0 if v_ego < 0.5 else -STOP_DIST_SLEW   # stopped: never let the lead move away
+    self._stop_dist += float(np.clip(stop_dist_target - self._stop_dist, shrink_limit, STOP_DIST_SLEW))
+    lead_shift = SOLVER_STOP_DISTANCE - self._stop_dist
+
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + lead_shift
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + lead_shift
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
