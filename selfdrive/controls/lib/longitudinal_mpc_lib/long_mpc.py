@@ -249,8 +249,8 @@ class LongitudinalMpc:
     self.time_linearization = 0.0
     self.time_integrator = 0.0
     self.x0 = np.zeros(X_DIM)
-    self._last_dRel = 50.0
-    self._lead_dropout_frames = 0
+    self._last_dRel = [50.0, 50.0]          # per lead: [leadOne, leadTwo]
+    self._lead_dropout_frames = [0, 0]
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -292,24 +292,28 @@ class LongitudinalMpc:
     lead_xv = np.column_stack((x_lead_traj, v_lead_traj))
     return lead_xv
 
-  def process_lead(self, lead):
+  def process_lead(self, lead, idx):
+    # Dropout state is per lead (idx 0 = leadOne, 1 = leadTwo). When it was shared, an absent
+    # lead reused the other lead's distance and became a stopped phantom car at that spot.
     v_ego = self.x0[1]
     if lead is not None and lead.status:
       x_lead = lead.dRel
-      if self._last_dRel < 20.0 and self._last_dRel > 0:
-        max_decrease = max(0.15, v_ego * 0.05 * 1.5)
+      last_dRel = self._last_dRel[idx]
+      if last_dRel < 20.0 and last_dRel > 0:
+        # Only limit how fast a lead can appear to move AWAY (that is what makes the car go).
+        # A lead getting closer is taken at once, so cut-ins and closer leads are not delayed.
         max_increase = 0.5 if lead.vLead < 0.5 else 2.0
-        x_lead = float(np.clip(x_lead, self._last_dRel - max_decrease, self._last_dRel + max_increase))
-      self._last_dRel = x_lead
-      self._lead_dropout_frames = 0
+        x_lead = float(min(x_lead, last_dRel + max_increase))
+      self._last_dRel[idx] = x_lead
+      self._lead_dropout_frames[idx] = 0
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
-      self._lead_dropout_frames += 1
-      if self._last_dRel < 25.0 and v_ego > 1.0 and self._lead_dropout_frames <= 10:
-        x_lead = self._last_dRel
+      self._lead_dropout_frames[idx] += 1
+      if self._last_dRel[idx] < 25.0 and v_ego > 1.0 and self._lead_dropout_frames[idx] <= 10:
+        x_lead = self._last_dRel[idx]
         v_lead = 0.0
         a_lead = 0.0
         a_lead_tau = _LEAD_ACCEL_TAU
@@ -333,8 +337,8 @@ class LongitudinalMpc:
     v_ego = self.x0[1]
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
-    lead_xv_0 = self.process_lead(radarstate.leadOne)
-    lead_xv_1 = self.process_lead(radarstate.leadTwo)
+    lead_xv_0 = self.process_lead(radarstate.leadOne, 0)
+    lead_xv_1 = self.process_lead(radarstate.leadTwo, 1)
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
