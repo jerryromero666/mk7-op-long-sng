@@ -11,13 +11,13 @@ def job(args):
   nk = NOISE[nkname]
   if kind == 'stat':
     r = B.run(mb, cfgb, bm, 60.0, B.stationary(), gap0=p, mode='vision', seed=seed, noise_kw=nk)
-    return kind, sum(e[1] == 'fired' for e in r.events)
+    return kind, sum(e[1].startswith('fired') for e in r.events)
   if kind == 'creep':
     vc, tc = p
     r = B.run(mb, cfgb, bm, T0 + 12, B.creep(T0, vc, tc), gap0=4.5, mode='vision', seed=seed, noise_kw=nk)
-    return kind, sum(e[1] == 'fired' for e in r.events)
+    return kind, sum(e[1].startswith('fired') for e in r.events)
   r = B.run(mb, cfgb, bm, T0 + 3, B.launch(T0, p), gap0=4.5, mode='vision', seed=seed, noise_kw=nk)
-  f = [e[0] - T0 for e in r.events if e[1] == 'fired']
+  f = [e[0] - T0 for e in r.events if e[1].startswith('fired')]
   return (kind, p), (f[0] if f else np.nan)
 def evaluate(ov, pool, seeds_stat=range(1, 9)):
   jobs = [(ov, 'stat', g, nk, s) for nk in ('sv.5', 'corr', 'stress') for g in (3.5, 4.5, 5.5) for s in seeds_stat]

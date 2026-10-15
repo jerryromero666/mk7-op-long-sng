@@ -1,4 +1,15 @@
-# Mk7 GTI openpilot tuning: handoff note (2026-10-15)
+# Mk7 GTI openpilot tuning: handoff note (2026-10-15, update 2)
+
+## 0. WHERE THINGS STAND RIGHT NOW (read first)
+
+- **Launch boost:** the build is committed as `1973928` on local branch `t2_launch_boost`, based on `t2_lead2_phantom_fix`. It has NOT been pushed and has NOT been reviewed.
+  - The exact commit is in `handoff/launch_boost_wip/0001-*.patch`. Recreate the branch with:
+    `git checkout -b t2_launch_boost origin/t2_lead2_phantom_fix && git am handoff/launch_boost_wip/0001-*.patch`
+  - The final simulator runs were still going when this note was written. Next: run the two adversarial reviews in section 8, fix what they find, then push and give the user `/data/mk7_switch.sh t2_launch_boost`.
+  - The user is waiting to test this branch next.
+- **Hill-hold study:** done. The result is in section 9 and in `handoff/holdv2/hold_design_result.json`. The recommended fix is candidate A, but build it ONLY after the user's fault traces confirm it. Those commands are in section 9.
+- The user said their usage is low (89% of the weekly limit used). Keep replies short and spend effort only on the boost review and the hill-hold fix.
+
 
 Paste this whole file into a new Claude Code session (any account) that has access to
 `github.com/jerryromero666/mk7-op-long-sng`. Everything referenced here is on the
@@ -177,9 +188,9 @@ cd /data/openpilot && git fetch sngrepo mk7_tools && git show FETCH_HEAD:mk7_lau
   - The delay is structural: the MPC's jerk-limited reaction plus 0.5 s actuator delay.
 - **Fix in progress: a feed-forward "launch boost".** It reacts to the lead departing instead of waiting for the MPC.
 
-## 8. `t2_launch_boost`: status and design (WORK IN PROGRESS, NOT REVIEWED)
+## 8. `t2_launch_boost`: status and design (BUILT as 1973928, NOT REVIEWED, NOT PUSHED)
 
-- **Snapshot:** `handoff/launch_boost_wip/launch_boost.py` (new module) and `longitudinal_planner.diff`, which adds about 17 lines to `selfdrive/controls/lib/longitudinal_planner.py`.
+- **Snapshot:** `handoff/launch_boost_wip/0001-*.patch` (the full commit, apply with `git am`) and `launch_boost.py`. It adds a new module and wires it into `selfdrive/controls/lib/longitudinal_planner.py`. The constants in the design below are from the first draft; the committed module is the source of truth.
 - **Base:** `origin/t2_lead2_phantom_fix`.
 - **Simulator scripts:** `handoff/sim/boost/` (boostsim.py, eval_launch.py, safety.py, falsefire.py, creepcheck.py …).
 
@@ -229,29 +240,59 @@ cd /data/openpilot && git fetch sngrepo mk7_tools && git show FETCH_HEAD:mk7_lau
   - Tell the user: `/data/mk7_switch.sh t2_launch_boost` → reboot → drive with stop-and-go → `python3 /data/mk7_launch2.py 0`.
   - Compare against route 339: act1s 0.6–1.5, planMax 1.38, v4 3.98.
 
-## 9. Hill hold v2: status and next steps (goal A, still unsolved)
+## 9. Hill hold v2: study DONE, waiting on user traces (goal A, still unsolved)
 
-- Known: timeout 20 doesn't fault but rolls back on 11%. Timeout 0 holds but faults.
-- **Need from the user (car OFF):**
-  ```
-  python3 /data/mk7_hold_trace.py --list 5          # find the hold_tsk_owned drives (were #2 = route 338, #3 = route 337)
-  python3 /data/mk7_hold_trace.py --route 2 --fault 1
-  python3 /data/mk7_hold_trace.py --route 3 --fault 1
-  ```
-  Get the PASTE block and the fault timeline. Look for:
-  - HMS, Anhalten and Anfahren on ACC_06 and ACC_07, and vEgo, in the 1–2 s before `accFaulted`.
-  - Whether HMS=4/Anfahren was sent while the car was still moving.
-  - ESP_21 bit 63 and the ESP_33 bits.
-  - TSK_06 status.
-  - Motor_16 grade.
-  - Whether the fault follows a brake press or a stop/pid flip.
-- **Candidate fixes to evaluate** (`handoff/holdv2/` has the frame-replay tools and early outputs):
-  1. Use a true standstill test (`CS.out.standstill` or vEgo < ~0.05) for the HMS=4 latch instead of vEgo < 1.0, so the car never sends start while still rolling. Keep a short non-zero HMS=1 window.
-  2. Start the HMS=1 window before the wheels stop, so the zero-torque gap overlaps the final braking. Latch HMS=4 at true standstill.
-  3. Keep ACC_06 consistent with ACC_07 during the handoff (no Anhalten together with Anfahren) and keep the accel negative, so the TSK keeps its brake torque.
+**Study result (full detail in `handoff/holdv2/hold_design_result.json`; raw studies in `hold_studies_raw.json`; frame-replay tools in `holdv2/replay` and `holdv2/design/candidates.py`):**
+- The only CAN difference between `hold_tsk_owned` (faults) and its parent (no faults) is the parent's 0.40 s **ACC_07 stop announcement**: HMS=1, Anhalten=1 and Anhalteweg 0.3, sent while the car is still moving. Every other frame is identical.
+- `hold_tsk_owned` latches HMS=4 on the first stopping frame below 1.0 m/s. On hills the planner's stopping state starts late, at or after the wheels hit 0, so the announcement is never sent.
+- **Root-cause ranking:**
+  - **H1 (~55%):** without the announcement, the ESP's ACC stopping procedure (ESP_21 bit 63) never runs, so the ESP treats the standstill as time-limited. TSK goes 3→6 a few seconds into the stop. Route 338 faulted about 3–4 s after stopping.
+  - **H3 (~15%):** a plausibility rejection of start-without-stop. Same fix as H1.
+  - **H2 (~15%):** TSK torque too low or slip on the grade.
+  - **H4 (~7%):** HMS 1↔4 cycling as speed crosses 1.0 m/s.
+  - **H5 (~8%):** confounds such as startup handover, a second ACC sender or pedal toggling.
+- Every fault-free hold on record (routes 332/333, holds of 11–26 s) had that announcement while the car was moving, with bit 63 on and then off before HMS=4.
 
-  Build the chosen one as a single branch off `claude/determined-hypatia-pnidyz`. Test flat first, then a steep hill with a foot ready.
-- Background notes: `handoff/hillhold_study/` (01_hold_chain, 02_history, 03_external, 04_hypotheses, 05_trace_signals, plus `vw_mqb.dbc`).
+**Recommended fix, candidate A ("hold_announce_early"):**
+- New branch off `t2_lead2_phantom_fix`. Change only `MQBStandstillManager`.
+- **Announcement:** send the parent's proven 20-frame (0.4 s) announcement on the first frame with vEgo < 1.5 m/s while braking (accel < 0 or stopping). This trigger is speed-based instead of OP's stopping state, so planner lag can't skip it.
+- **Window:** cut it short if vEgo falls below 0.5 m/s, so it always ends while the car is still moving.
+- **Hold:** latch HMS=4, ACC_07 Anfahren and Anhalteweg 20.46 until vEgo > 2.6 m/s or long control goes off.
+- **Never:**
+  - Send HMS=1 at standstill.
+  - Change HMS at standstill.
+  - Use any grade input.
+- The code sketch is in the JSON (candidate A).
+- Risk: ACC_06 shows the pid state for most of the window. If the ESP needs a consistent ACC_06, force ACC_06 to S or G during the window.
+- Alternative B: end the window on ESP_21 bit 63 (`ESP_Anhaltevorgang_ACC_aktiv`), RJ's handshake. This needs a one-line carstate field.
+- Rejected: C, D and E (they would still fault or roll back; reasons in the JSON).
+- **Gate:** build or drive A ONLY if the faulting stops on 337/338 show "ESP ACC stopping procedure (bit 63): never on".
+  - If bit 63 was on and the stop still faulted, H1 is refuted. Look at H2/H4/H5 instead.
+
+**Commands for the user** (car OFF). Check the numbering first: 339 = 1, 338 = 2, 337 = 3. A route name prefix also works (`--route 00000338`).
+```
+python3 /data/mk7_hold_trace.py --list 6
+python3 /data/mk7_hold_trace.py --route 2
+python3 /data/mk7_hold_trace.py --route 2 --fault 1 --hz 25 --before 6 --after 2
+python3 /data/mk7_hold_trace.py --route 2 --all-timelines | grep -F -e 'IN DETAIL' -e 'Grade while' -e 'stopping state began' -e 'Stood still' -e '(bit 63)' -e 'TSK status' -e 'OP HMS sent' -e 'during stop' -e '2 s before'
+python3 /data/mk7_hold_trace.py --route 3
+python3 /data/mk7_hold_trace.py --route 3 --fault 1 --hz 25 --before 6 --after 2
+python3 /data/mk7_hold_trace.py --route 1     # control: route 339, parent hold code, no faults
+```
+**What to look for:**
+- "TSK status 3 -> 6" (a 7 would mean chatter).
+- When the fault happens: "FAULT 6 at +X s". H1 predicts a similar X in both drives.
+- "(bit 63): never on" is the go-ahead for A.
+- "stopping state began" at or after +0.00 s, with no "OP HMS -> 1" before the wheels reach 0.
+- The ESP bits in the 2 s before the fault:
+  - Bit 38 or 45 first means H3.
+  - Bit 29 first means the ESP withdrew.
+  - Chatter or pedal toggling means H4/H5.
+  - "second ACC sender" points to the startup handover, which matters for route 338's fault at 0:23.
+
+After building A: drive flat first, then a steep hill with a foot ready. Check with `mk7_hold_trace --route 1`: did it hold over 20 s on 11%, with no TSK 6?
+
+Background notes: `handoff/hillhold_study/` (01_hold_chain, 02_history, 03_external, 04_hypotheses, 05_trace_signals, `vw_mqb.dbc`).
 
 ## 10. Other pending items (lower priority)
 

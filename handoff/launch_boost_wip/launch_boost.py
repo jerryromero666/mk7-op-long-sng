@@ -5,8 +5,9 @@ From a stop the MPC answers a departing lead with a slow, jerk-limited ramp: on 
 peaks ~1.4 m/s2 and the first second averages ~0.6 m/s2. No MPC weight, accel cap or follow
 time changes that much (closed-loop sim). This adds a feed-forward accel driven by the lead.
 
-The planner sends max(MPC, boost) before its e2e blend and accel clip, so both still apply, as
-do the car's limits. The boost only ever adds accel; it never brakes.
+ACC mode only (the planner passes long_active False in experimental mode). The planner sends
+max(MPC, boost) before its accel clip, so that clip and the car's limits still apply. The boost
+only ever adds accel; it never brakes.
 
   arm      ego stopped (long active, no pedals) behind a stopped lead for ARM_TIME; latch the gap
   trigger  the MPC already asks to go (so the boost never takes the car out of stopping by
@@ -50,8 +51,8 @@ K_GAP = 3.0              # 1/s2
 D_GAP0 = 0.2             # m
 T_GAP = 1.0              # s
 A_MARGIN = 0.3           # m/s2
-BOOST_MAX = 1.5          # m/s2, below the planner's own clip at launch (1.6 at 0 m/s)
-BOOST_MAX_LIMIT = 1.6    # m/s2, upper clamp for the live value
+BOOST_MAX = 1.3          # m/s2, default max boost
+BOOST_MAX_LIMIT = 1.5    # m/s2, clamp for the live value, below the planner clip at launch (1.6)
 J_UP = 2.5               # m/s3
 J_DOWN = 1.5             # m/s3
 V_HANDOVER = 5.0         # m/s
@@ -91,7 +92,7 @@ class LaunchBoost:
     self.d_f = None          # filtered leadOne dRel, vLead, aLeadK (d_f None while there is no lead)
     self.v_f = 0.0
     self.a_f = 0.0
-    self.sync = False
+    self.mpc_sync = False
     self._reset()
 
   def _reset(self):
@@ -106,7 +107,7 @@ class LaunchBoost:
     self.d_peak = 0.0
 
   def _end(self, event):
-    self.event = event
+    self.event = f"{self.event}, {event}" if self.event else event
     self._reset()
     return 0.0
 
@@ -165,8 +166,8 @@ class LaunchBoost:
 
   def mpc_behind(self, v_mpc, v_ego):
     """True from the trigger until the MPC's own speed state has caught up with the boosted car."""
-    self.sync = (self.active or self.sync) and v_mpc < v_ego and v_ego > V_EGO_STOPPED
-    return self.sync
+    self.mpc_sync = (self.active or self.mpc_sync) and v_mpc < v_ego and v_ego > V_EGO_STOPPED
+    return self.mpc_sync
 
   def _update_active(self, long_active, v_ego, gas_pressed, brake_pressed, lead_one, lead_two, a_target_mpc, crash_cnt):
     # abort: drop the boost at once and leave the MPC output as it is

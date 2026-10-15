@@ -14,7 +14,7 @@ for nk in (dict(sv=0.4), dict(sd=0.4, sv=0.6, sa=0.5, white_frac=0.2)):
         if pl.lb.event == 'fired':
           x0.setdefault('x', plant.x)
       r = B.run(mb, cfgb, bm, 30.0, B.stationary(), gap0=gap0, mode='vision', seed=seed, noise_kw=nk, probe=probe)
-      fires = [e for e in r.events if e[1] == 'fired']
+      fires = [e for e in r.events if e[1].startswith('fired')]
       nf += len(fires)
       if fires:
         worst['vmax'] = max(worst['vmax'], r.v.max()); worst['bmax'] = max(worst['bmax'], r.boost.max())

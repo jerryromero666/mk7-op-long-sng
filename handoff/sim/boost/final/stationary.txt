@@ -1,0 +1,6 @@
+stationary lead 60 s, gaps 3.5/4.5/5.5 x seeds 1..20  (boost=WT)
+noise                        runs | base flips vmax | boost fires flips vmax
+sd.3 sv.3 sa.3                 60 |        136 0.00 |           0   136 0.00
+sd.3 sv.5 sa.3                 60 |        392 0.00 |           0   392 0.00
+sd.3 sv.5 corr                 60 |        387 0.00 |           0   387 0.00
+stress sd.4 sv.6 sa.5 corr     60 |       1291 0.13 |           2  1286 0.13

@@ -1,0 +1,7 @@
+OK   launch aL1.6 gap4.5                max|aTarget real - harness| 0.0e+00  shouldStop mismatches 0  events real [(8.95, 'fired'), (14.15, 'handed over')]  harness [(8.95, 'fired'), (14.15, 'handed over')]
+OK   launch aL1.0 gap3.5                max|aTarget real - harness| 0.0e+00  shouldStop mismatches 0  events real [(9.15, 'fired'), (14.75, 'handed over')]  harness [(9.15, 'fired'), (14.75, 'handed over')]
+OK   launch then brake 4.0 after 2 s    max|aTarget real - harness| 0.0e+00  shouldStop mismatches 0  events real [(8.95, 'fired'), (10.65, 'abort: lead not pulling away')]  harness [(8.95, 'fired'), (10.65, 'abort: lead not pulling away')]
+OK   cut-in 4 m v=1 at t+2 s            max|aTarget real - harness| 0.0e+00  shouldStop mismatches 0  events real [(8.95, 'fired'), (10.0, 'abort: closer lead')]  harness [(8.95, 'fired'), (10.0, 'abort: closer lead')]
+OK   driver brake at t+1.5 s            max|aTarget real - harness| 0.0e+00  shouldStop mismatches 0  events real [(8.95, 'fired'), (9.5, 'abort: driver or long inactive')]  harness [(8.95, 'fired'), (9.5, 'abort: driver or long inactive')]
+OK   experimental mode: boost never on
+REAL PLANNER == HARNESS

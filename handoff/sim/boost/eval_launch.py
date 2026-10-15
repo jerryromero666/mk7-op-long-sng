@@ -43,6 +43,8 @@ if __name__ == '__main__':
         mx = {k: np.nanmax([x[k] for x in L]) for k in ('apk', 'jcmd', 'jrun', 'jact')}
         tot[n].append(mean)
         print(f"{g:4.1f} {a:3.1f} {n:5s} | {mean['delay']:5.2f} {mean['a1']:5.2f} {mean['v2']:5.2f} {mean['v4']:5.2f} {mean['t5']:5.2f} {mean['gg4']:6.2f} {mn['gmin']:5.2f} {mx['apk']:5.2f} {mx['jcmd']:5.1f} {mx['jrun']:5.2f} {mx['jact']:5.2f} {mean['fire']:5.2f} {mean['bmax']:4.2f} {mn['amin']:5.2f}")
+  ends = collections.Counter(x['end'].split(', ')[-1] if x['end'] else ('no fire' if np.isnan(x['fire']) else 'still on') for (n, g, a), L in agg.items() if n == 'boost' for x in L)
+  print('-- how the boost ended (all boost launches):', dict(ends))
   print('-- mean over all cells')
   for n in ('base', 'boost'):
     T = tot[n]

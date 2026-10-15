@@ -5,7 +5,7 @@ from multiprocessing import Pool
 M = B.M
 T0 = 8.0
 BOOST_REF = sys.argv[1] if len(sys.argv) > 1 else 'WT'
-ECU = (4.0, 1.0) if (len(sys.argv) > 2 and sys.argv[2] == 'ecu') else None
+ECU = {'ecu': (4.0, 1.0), 'ecu4': (4.0, 4.0)}.get(sys.argv[2]) if len(sys.argv) > 2 else None
 NK = dict(sd=0.3, sv=0.4, sa=0.3)
 SEEDS = range(1, 6)
 INF = 1e9
@@ -54,7 +54,7 @@ def job(args):
     kw['lead2'] = dict(kw['lead2'])
   r = B.run(m, cfg, bm, T, lead_a, gap0=gap0, mode=mode, seed=seed, noise_kw=NK, ecu_grad=ECU, **kw)
   post = r.t >= T0
-  fired = [e for e in r.events if e[1] == 'fired']
+  fired = [e for e in r.events if e[1].startswith('fired')]
   ends = [e for e in r.events if e[1] != 'fired']
   # boost after an abort trigger time (lead lost / brake / gas): must be 0 from that frame on
   t_ev = kw.get('driver_brake_t') or kw.get('gas_t') or (kw['lead1_lost'][0] if 'lead1_lost' in kw else None)

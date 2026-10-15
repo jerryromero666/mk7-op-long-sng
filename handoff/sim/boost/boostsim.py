@@ -54,7 +54,8 @@ def check_wiring(ref):
   src = M.git_show(ref, M.PLANNER_PATH) if ref != 'WT' else open(os.path.join(WT, M.PLANNER_PATH)).read()
   lines = [
     "output_a_target_mpc, output_should_stop_mpc = get_accel_from_plan(",
-    "launch_boost = self.launch_boost.update(sm['carControl'].longActive, v_ego, sm['carState'].gasPressed,",
+    "long_active_acc = sm['carControl'].longActive and not self.is_e2e(sm)",
+    "launch_boost = self.launch_boost.update(long_active_acc, v_ego, sm['carState'].gasPressed,",
     "sm['carState'].brakePressed, sm['radarState'].leadOne,",
     "sm['radarState'].leadTwo, output_a_target_mpc, self.mpc.crash_cnt)",
     "if launch_boost > 0.0:",
@@ -293,7 +294,7 @@ def launch_metrics(r, T0):
   jerk_act = np.max(np.abs(np.diff(a[post]))) / M.DT_MDL
   moving = np.where(post & (v > 0.1))[0]          # after ego starts: excludes the stopping->pid step
   jerk_run = np.max(np.abs(np.diff(r.a_target[moving[0]:]))) / M.DT_MDL if len(moving) > 1 else np.nan
-  fired = [e for e in r.events if e[1] == 'fired']
+  fired = [e for e in r.events if e[1].startswith('fired')]
   ends = [e for e in r.events if e[1] != 'fired']
   return dict(delay=delay, a1=a1, v2=v[i(2)], v4=v[i(4)], t5=(t[v5[0]] - T0) if len(v5) else np.nan,
               gg4=g[i(4)] - g[i(0) - 1], gmin=float(np.min(g[post])), apk=float(np.max(a[post])),
