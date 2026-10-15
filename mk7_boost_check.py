@@ -30,7 +30,8 @@ ROOT = '/data/media/0/realdata'
 BASE_BRANCH = 't2_accel_cap_launch'
 LIST_N = 8
 IGNORE_EVENTS = {'preEnableStandstill', 'pcmEnable', 'buttonEnable', 'silentButtonEnable',
-                 'gasPressedOverride', 'resumeRequired'}
+                 'gasPressedOverride', 'resumeRequired', 'steerOverride', 'preLaneChangeLeft',
+                 'preLaneChangeRight', 'laneChange', 'laneChangeBlocked', 'steerTempUnavailableSilent'}
 
 
 def routes_on_disk():
