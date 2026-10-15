@@ -1,0 +1,811 @@
+========================================================================================================================
+SCENARIO flat_stop
+-- PAR: HMS seq 0>1>4>0 | HMS1 0.42s (v 0.68-1.01, at standstill 0.00s) | modelled b63 0.42s, at standstill 0.00s, last b63 ends 1.94s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.96 v=0.67 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.92 v=0.63 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>1>4>0 | HMS1 0.02s (v 1.01-1.01, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.01-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 2.34s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.66 b63=1
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=1
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=1
+       -2.32 v=0.96 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.11 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +12.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.47-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 2.70s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.66 b63=1
+       -2.68 v=1.39 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.65 b63=0
+       -2.38 v=1.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.75 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +12.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>1>4>0 | HMS1 0.40s (v 0.70-1.01, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 1.96s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.40s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.98 v=0.68 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.94 v=0.65 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +12.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>1>4>0 | HMS1 1.82s (v 0.05-1.01, at standstill 0.00s) | modelled b63 1.82s, at standstill 0.04s, last b63 ends 0.54s before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -0.56 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.52 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>1>4>1>4>0 | HMS1 0.42s (v 0.03-1.01, at standstill 0.40s) | modelled b63 0.40s, at standstill 0.40s, last b63 ends 0.14s before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       -0.56 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       -0.52 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       -0.16 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.12 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +10.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +11.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO uphill11_lag0.04_dither0.30
+-- PAR: HMS seq 0>4>1>4>0 | HMS1 0.40s (v -0.00-0.30, at standstill 0.12s) | modelled b63 0.40s, at standstill 0.08s, last b63 ends never before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.37 b63=0
+       +0.10 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.61 b63=1
+       +0.46 v=0.14 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=1
+       +0.50 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.37 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.15-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 1.34s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -1.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -1.72 v=1.46 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.67 b63=1
+       -1.36 v=1.13 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.59 b63=1
+       -1.32 v=1.10 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.58 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.37 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.47-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 1.70s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -1.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -1.72 v=1.46 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.67 b63=1
+       -1.68 v=1.42 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.66 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.37 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.37 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.37 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>4>1>4>0 | HMS1 0.40s (v -0.00-0.30, at standstill 0.12s) | modelled b63 0.40s, at standstill 0.08s, last b63 ends never before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.06 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.37 b63=0
+       +0.10 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.61 b63=1
+       +0.46 v=0.14 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=1
+       +0.50 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO uphill11_lag0.50_dither0.30
+-- PAR: HMS seq 0>4>1>4>0 | HMS1 0.40s (v -0.02-0.30, at standstill 0.24s) | modelled b63 0.40s, at standstill 0.26s, last b63 ends never before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.43 b63=0
+       +0.56 v=0.16 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.67 b63=1
+       +0.92 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=1
+       +0.96 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.43 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.15-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 1.34s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -1.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -1.72 v=1.46 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.67 b63=1
+       -1.36 v=1.13 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.59 b63=1
+       -1.32 v=1.10 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.58 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.43 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.47-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 1.70s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -1.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -1.72 v=1.46 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.67 b63=1
+       -1.68 v=1.42 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.66 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.43 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.43 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.43 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>4>1>4>0 | HMS1 0.40s (v -0.02-0.30, at standstill 0.24s) | modelled b63 0.40s, at standstill 0.26s, last b63 ends never before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -4.00 v=3.50 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -3.98 v=3.49 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.20 b63=0
+       -0.64 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.41 b63=0
+       +0.52 v=0.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.43 b63=0
+       +0.56 v=0.16 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.67 b63=1
+       +0.92 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=1
+       +0.96 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.21 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO downhill6_stop_at_v1.10
+-- PAR: HMS seq 0>1>4>0 | HMS1 2.00s (v 0.93-1.11, at standstill 0.00s) | modelled b63 2.00s, at standstill 0.00s, last b63 ends 3.66s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -5.68 v=1.11 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.65 b63=0
+       -5.64 v=1.10 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.89 b63=1
+       -3.68 v=0.93 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -3.64 v=0.93 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>1>4>1>4>1>4>1>4>0 | HMS1 1.44s (v 1.00-1.11, at standstill 0.00s) | modelled b63 1.44s, at standstill 0.00s, last b63 ends 4.06s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -5.68 v=1.11 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.65 b63=0
+       -5.64 v=1.10 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.89 b63=1
+       -4.44 v=1.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -4.42 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=1
+       -4.30 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -4.26 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       -4.22 v=1.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=0
+       -4.20 v=1.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       -4.14 v=1.02 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=0
+       -4.10 v=1.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=1
+       -4.08 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -4.04 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.14-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 5.96s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -6.38 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.50 b63=0
+       -6.34 v=1.46 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.50 b63=1
+       -5.98 v=1.14 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.48 b63=1
+       -5.94 v=1.13 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.48 b63=0
+       -5.68 v=1.11 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.65 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.48-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 6.32s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -6.38 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.50 b63=0
+       -6.34 v=1.46 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.50 b63=1
+       -6.30 v=1.45 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.50 b63=0
+       -5.68 v=1.11 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.65 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.06-1.11, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 5.26s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.40s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -5.68 v=1.11 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.65 b63=0
+       -5.64 v=1.10 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.89 b63=1
+       -5.28 v=1.06 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -5.24 v=1.06 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>1>4>0 | HMS1 5.60s (v 0.05-1.11, at standstill 0.00s) | modelled b63 5.60s, at standstill 0.04s, last b63 ends 0.06s before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -5.68 v=1.11 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.65 b63=0
+       -5.64 v=1.10 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.89 b63=1
+       -0.08 v=0.04 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -0.04 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>1>4>1>4>1>4>1>4>1>4>0 | HMS1 1.84s (v -0.00-1.11, at standstill 0.40s) | modelled b63 1.84s, at standstill 0.40s, last b63 ends 0.00s before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -5.68 v=1.11 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.65 b63=0
+       -5.64 v=1.10 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.89 b63=1
+       -4.44 v=1.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -4.42 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=1
+       -4.30 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -4.26 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       -4.22 v=1.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=0
+       -4.20 v=1.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       -4.14 v=1.02 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=0
+       -4.10 v=1.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=1
+       -4.08 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       -4.04 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       -0.08 v=0.04 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=0
+       -0.04 v=0.03 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.25 b63=1
+       +0.32 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       +0.36 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO downhill6_stop_at_v0.40
+-- PAR: HMS seq 0>4>0>4>0>4>1>4>0 | HMS1 0.40s (v 0.26-0.39, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 0.72s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.36 b63=0
+       -1.10 v=0.38 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.60 b63=1
+       -0.74 v=0.25 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       -0.70 v=0.24 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>4>0>4>0>4>0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.36 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.14-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 5.96s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -6.38 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.50 b63=0
+       -6.34 v=1.46 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.50 b63=1
+       -5.98 v=1.14 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.48 b63=1
+       -5.94 v=1.13 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.48 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.36 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.48-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 6.32s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -6.38 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.50 b63=0
+       -6.34 v=1.46 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.50 b63=1
+       -6.30 v=1.45 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.50 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.36 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>4>0>4>0>4>1>4>0 | HMS1 0.40s (v 0.26-0.39, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 0.72s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.40s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.36 b63=0
+       -1.10 v=0.38 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.60 b63=1
+       -0.74 v=0.25 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       -0.70 v=0.24 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+       +9.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>4>0>4>0>4>1>4>0 | HMS1 1.06s (v 0.05-0.39, at standstill 0.00s) | modelled b63 1.06s, at standstill 0.04s, last b63 ends 0.06s before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.36 b63=0
+       -1.10 v=0.38 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.60 b63=1
+       -0.08 v=0.04 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       -0.04 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>4>0>4>0>4>1>4>0 | HMS1 0.40s (v -0.00-0.04, at standstill 0.40s) | modelled b63 0.40s, at standstill 0.40s, last b63 ends 0.00s before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -8.00 v=3.01 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -7.98 v=2.98 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.60 b63=0
+       -1.80 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.76 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.74 v=0.49 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.70 v=0.50 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.26 b63=0
+       -1.66 v=0.48 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.26 b63=0
+       -1.14 v=0.38 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.36 b63=0
+       -0.08 v=0.04 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.20 b63=0
+       -0.04 v=0.03 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.20 b63=1
+       +0.32 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +0.36 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +7.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO chatter_at_standstill
+-- PAR: HMS seq 0>1>4>1>4>1>4>1>4>1>4>1>4>1>4>0 | HMS1 2.82s (v -0.00-1.01, at standstill 2.40s) | modelled b63 2.82s, at standstill 2.40s, last b63 ends 1.94s before wheels 0 | HMS changes at standstill 12 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.96 v=0.67 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.92 v=0.63 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.12 b63=0
+       +1.20 v=0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.36 b63=1
+       +1.56 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +1.60 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.28 b63=0
+       +2.86 v=0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.52 b63=1
+       +3.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.24 b63=1
+       +3.26 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.24 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.12 b63=0
+       +4.10 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.36 b63=1
+       +4.46 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +4.50 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.18 b63=0
+       +5.56 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.42 b63=1
+       +5.92 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +5.96 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.23 b63=0
+       +6.16 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.47 b63=1
+       +6.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       +6.56 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.18 b63=0
+       +8.26 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.42 b63=1
+       +8.62 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +8.66 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>1>4>0 | HMS1 0.02s (v 1.01-1.01, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.28 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.23 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.01-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 2.34s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.66 b63=1
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=1
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=1
+       -2.32 v=0.96 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.11 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.28 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.23 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.47-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 2.70s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.66 b63=1
+       -2.68 v=1.39 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.65 b63=0
+       -2.38 v=1.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.75 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.28 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.23 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>1>4>0 | HMS1 0.40s (v 0.70-1.01, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 1.96s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.40s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.98 v=0.68 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.94 v=0.65 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.28 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.23 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>1>4>0 | HMS1 1.82s (v 0.05-1.01, at standstill 0.00s) | modelled b63 1.82s, at standstill 0.04s, last b63 ends 0.54s before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -0.56 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.52 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.28 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.12 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.23 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>1>4>1>4>1>4>1>4>1>4>1>4>1>4>1>4>0 | HMS1 2.82s (v -0.00-1.01, at standstill 2.80s) | modelled b63 2.80s, at standstill 2.80s, last b63 ends 0.14s before wheels 0 | HMS changes at standstill 14 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       -0.56 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       -0.52 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       -0.16 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.12 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +1.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.15 b63=0
+       +1.16 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.12 b63=0
+       +1.20 v=0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.36 b63=1
+       +1.56 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +1.60 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +2.52 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.10 b63=0
+       +2.82 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.28 b63=0
+       +2.86 v=0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.52 b63=1
+       +3.22 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.24 b63=1
+       +3.26 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.24 b63=0
+       +4.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.05 b63=0
+       +4.06 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.12 b63=0
+       +4.10 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.36 b63=1
+       +4.46 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +4.50 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +5.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.30 b63=0
+       +5.52 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.18 b63=0
+       +5.56 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.42 b63=1
+       +5.92 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +5.96 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+       +6.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=-0.05 b63=0
+       +6.12 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.23 b63=0
+       +6.16 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.47 b63=1
+       +6.52 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=1
+       +6.56 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.25 b63=0
+       +8.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+       +8.22 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.18 b63=0
+       +8.26 v=-0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.42 b63=1
+       +8.62 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=1
+       +8.66 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.20 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+     ... 0 more transitions
+
+========================================================================================================================
+SCENARIO brake_during_stop
+-- PAR: HMS seq 0>1>4>1>0>4>0 | HMS1 0.44s (v -0.00-1.01, at standstill 0.02s) | modelled b63 0.42s, at standstill 0.00s, last b63 ends 1.94s before wheels 0 | HMS changes at standstill 3 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.96 v=0.67 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.92 v=0.63 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=1 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=4 A6=.. A7=.G d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>1>4>1>0>4>0 | HMS1 0.04s (v -0.00-1.01, at standstill 0.02s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 3 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=1 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=4 A6=.. A7=.G d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0>4>0 | HMS1 0.40s (v 1.01-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 2.34s before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.66 b63=1
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=1
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=1
+       -2.32 v=0.96 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.11 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=4 A6=.. A7=.G d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0>4>0 | HMS1 0.04s (v 1.47-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 2.70s before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.66 b63=1
+       -2.68 v=1.39 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.65 b63=0
+       -2.38 v=1.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.75 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=4 A6=.. A7=.G d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>1>4>1>0>4>0 | HMS1 0.42s (v -0.00-1.01, at standstill 0.02s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 1.96s before wheels 0 | HMS changes at standstill 3 | A6 Anfahren with A7 Anhalten 0.40s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.98 v=0.68 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.94 v=0.65 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=1 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>1>4>1>0>4>0 | HMS1 1.84s (v -0.00-1.01, at standstill 0.02s) | modelled b63 1.82s, at standstill 0.04s, last b63 ends 0.54s before wheels 0 | HMS changes at standstill 4 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -0.56 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.52 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=1 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=4 A6=.. A7=.G d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>1>4>1>4>1>0>4>0 | HMS1 0.44s (v -0.00-1.01, at standstill 0.42s) | modelled b63 0.40s, at standstill 0.40s, last b63 ends 0.14s before wheels 0 | HMS changes at standstill 5 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       -0.56 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       -0.52 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       -0.16 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.12 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +3.02 v=-0.00 lcs=stop HMS=1 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +3.04 v=-0.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=+3.01 b63=0
+       +8.00 v=-0.00 lcs=off  HMS=4 A6=.. A7=.G d=20.46 acc=-0.06 b63=0
+       +8.02 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.18 b63=0
+      +11.02 v=-0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO rollback_while_stopped_1.2
+-- PAR: HMS seq 0>1>4>1>4>0 | HMS1 1.28s (v -0.02-1.20, at standstill 0.04s) | modelled b63 1.28s, at standstill 0.08s, last b63 ends 1.94s before wheels 0 | HMS changes at standstill 1 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.96 v=0.67 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.92 v=0.63 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +4.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       +4.42 v=1.07 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       +5.24 v=-0.02 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       +5.28 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- T0: HMS seq 0>1>4>1>4>0 | HMS1 0.48s (v 1.01-1.20, at standstill 0.00s) | modelled b63 0.46s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       +4.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       +4.42 v=1.07 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       +4.84 v=0.97 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       +4.88 v=0.89 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.01-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 2.34s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.66 b63=1
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=1
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=1
+       -2.32 v=0.96 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.11 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.47-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends 2.70s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.76 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.68 b63=0
+       -2.72 v=1.44 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.66 b63=1
+       -2.68 v=1.39 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.65 b63=0
+       -2.38 v=1.01 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.75 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.62 v=2.63 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- C: HMS seq 0>1>4>0 | HMS1 0.40s (v 0.70-1.01, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends 1.96s before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.40s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=.G A7=S. d= 0.30 acc=-0.99 b63=1
+       -1.98 v=0.68 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -1.94 v=0.65 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=+1.40 b63=0
+      +13.92 v=3.02 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- D: HMS seq 0>1>4>1>4>0 | HMS1 2.64s (v 0.05-1.20, at standstill 0.00s) | modelled b63 2.64s, at standstill 0.08s, last b63 ends 0.54s before wheels 0 | HMS changes at standstill 2 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.34 v=0.97 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.99 b63=1
+       -0.56 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.52 v=0.05 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +4.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       +4.42 v=1.07 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       +5.20 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       +5.24 v=-0.02 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+-- E: HMS seq 0>1>4>1>4>1>4>1>4>0 | HMS1 1.28s (v -0.02-1.20, at standstill 0.80s) | modelled b63 1.26s, at standstill 0.80s, last b63 ends 0.14s before wheels 0 | HMS changes at standstill 4 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=5.60 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -5.98 v=5.58 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-1.70 b63=0
+       -2.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-0.75 b63=0
+       -2.36 v=0.99 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-0.87 b63=0
+       -0.56 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       -0.52 v=0.05 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       -0.16 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       -0.12 v=0.03 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +4.38 v=1.01 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       +4.42 v=1.07 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       +4.84 v=0.97 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       +4.88 v=0.89 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+       +5.20 v=0.00 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=0
+       +5.24 v=-0.02 lcs=stop HMS=1 A6=S. A7=S. d= 0.30 acc=-1.23 b63=1
+       +5.60 v=0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=1
+       +5.64 v=-0.00 lcs=stop HMS=4 A6=S. A7=.G d=20.46 acc=-1.23 b63=0
+      +11.02 v=0.00 lcs=pid  HMS=4 A6=.G A7=.G d=20.46 acc=+0.20 b63=0
+      +12.00 v=0.52 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+1.40 b63=0
+
+========================================================================================================================
+SCENARIO crawl_no_stop
+-- PAR: HMS seq 0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+-- T0: HMS seq 0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+-- A: HMS seq 0>1>4>0 | HMS1 0.40s (v 1.23-1.49, at standstill 0.00s) | modelled b63 0.40s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -2.42 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.62 b63=0
+       -2.38 v=1.47 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.62 b63=1
+       -2.02 v=1.21 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.60 b63=1
+       -1.98 v=1.19 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.60 b63=0
+       +0.84 v=2.61 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+0.42 b63=0
+-- B: HMS seq 0>1>4>0 | HMS1 0.04s (v 1.48-1.49, at standstill 0.00s) | modelled b63 0.04s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -2.42 v=1.49 lcs=pid  HMS=1 A6=.. A7=S. d= 0.30 acc=-0.62 b63=0
+       -2.38 v=1.47 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.62 b63=1
+       -2.34 v=1.44 lcs=pid  HMS=4 A6=.. A7=.G d=20.46 acc=-0.62 b63=0
+       +0.84 v=2.61 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=+0.42 b63=0
+-- C: HMS seq 0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+-- D: HMS seq 0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+-- E: HMS seq 0 | HMS1 0.00s (v 0.00-0.00, at standstill 0.00s) | modelled b63 0.00s, at standstill 0.00s, last b63 ends never before wheels 0 | HMS changes at standstill 0 | A6 Anfahren with A7 Anhalten 0.00s
+       -6.00 v=4.00 lcs=off  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+       -5.98 v=3.99 lcs=pid  HMS=0 A6=.. A7=.. d=20.46 acc=-0.80 b63=0
+

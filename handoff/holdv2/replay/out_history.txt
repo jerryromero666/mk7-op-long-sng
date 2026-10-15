@@ -1,0 +1,26 @@
+flat_stop                        f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>1>4>0 | T0 0>1>4>0
+uphill5_lag0.04_dither0.15       f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>4>1>4>0 | T0 0>4>0
+uphill5_lag0.50_dither0.15       f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>4>1>4>0 | T0 0>4>0
+uphill11_lag0.04_dither0.30      f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>4>1>4>0 | T0 0>4>0
+uphill11_lag0.50_dither0.30      f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>4>1>4>0 | T0 0>4>0
+downhill6_stop_at_v1.10          f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.56s
+                                 HMS seq f30a396 0>1>4>0 | T0 0>1>4>1>4>1>4>1>4>0
+downhill6_stop_at_v0.40          f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>4>0>4>0>4>1>4>0 | T0 0>4>0>4>0>4>0
+chatter_at_standstill            f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 2.80s
+                                 HMS seq f30a396 0>1>4>1>4>1>4>1>4>1>4>1>4>1>4>0 | T0 0>1>4>0
+brake_during_stop                f30a396 vs d861e6b differ 0.42s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>1>4>1>0>1>4>0 | T0 0>1>4>1>0>4>0
+long_stop_30s                    f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>1>4>0 | T0 0>1>4>0
+rollback_while_stopped_0.4       f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>1>4>0 | T0 0>1>4>0
+rollback_while_stopped_1.2       f30a396 vs d861e6b differ 0.00s | d861e6b vs PAR 0.00s | PAR vs T0 0.80s
+                                 HMS seq f30a396 0>1>4>1>4>0 | T0 0>1>4>1>4>0
+HYPO_esp_hold_confirms           f30a396 vs d861e6b differ 5.92s | d861e6b vs PAR 0.82s | PAR vs T0 0.40s
+                                 HMS seq f30a396 0>1>4>3>4>0 | T0 0>1>4>0

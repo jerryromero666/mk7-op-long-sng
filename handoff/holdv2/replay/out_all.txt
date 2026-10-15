@@ -1,0 +1,519 @@
+ACC block md5 per ref: {'hms_latch_fix': '08cae061', 'claude/determined-hypatia-pnidyz': '08cae061', 'hold_tsk_owned': '08cae061'} | HOLD_REQUEST_TIMEOUT: {'HLF': 20, 'PAR': 20, 'T0': 0}
+legend: A6/A7 = ACC_06/ACC_07 Anhalten(S)/Anfahren(G); d = ACC_07 Anhalteweg; st = ACC_Status_ACC; L4 = _hms4_latched; lcs = actuators.longControlState as sent (1-frame lag)
+
+==============================================================================================================
+SCENARIO flat_stop
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +10.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +11.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 11.98s longest 11.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.56s (with A6 Anhalten 10.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+    +10.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +11.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +10.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +11.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 11.98s longest 11.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.56s (with A6 Anhalten 10.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+    +10.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +11.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.80s v0.05-0.99 acc<0 1.80s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +10.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -2.36:1->4@v0.99 +11.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.38s longest 12.38s runs 1 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.56s (with A6 Anhalten 10.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.02s (standstill 0.00, rolling v<1 0.00, v>=1 0.02); ACC_07 Anhalten total 0.02s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [-2.36..-1.98]
+
+==============================================================================================================
+SCENARIO uphill5_lag0.04_dither0.15
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.92s v0.06-0.49 acc<0 0.58s first -0.64, stopping: 0.14s v0.07-0.15 acc<0 0.14s first +0.46
+   Q2 HMS changes at standstill: +0.06:4->1 | rolling v<1.0: -0.64:0->4@v0.49 +0.46:1->4@v0.07 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.56s longest 6.56s runs 1 first 0.46 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.52s (with A6 Anhalten 6.40s, with A6 Anfahren 0.12s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.18, rolling v<1 0.22, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>4>1>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.06 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.37
+     +0.46 v=0.07 raw=0.06 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.21 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.92s v0.06-0.49 acc<0 0.58s first -0.64, stopping: 0.14s v0.07-0.15 acc<0 0.14s first +0.46
+   Q2 HMS changes at standstill: +0.06:4->1 | rolling v<1.0: -0.64:0->4@v0.49 +0.46:1->4@v0.07 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.56s longest 6.56s runs 1 first 0.46 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.52s (with A6 Anhalten 6.40s, with A6 Anfahren 0.12s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.18, rolling v<1 0.22, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.06 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.37 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.92s v0.06-0.49 acc<0 0.58s first -0.64, stopping: 0.36s v0.07-0.15 acc<0 0.36s first +0.16
+   Q2 HMS changes at standstill: none | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.96s longest 6.96s runs 1 first 0.06 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.70s (with A6 Anhalten 6.58s, with A6 Anfahren 0.12s, min acc -1.21)
+   HMS1 total 0.00s (standstill 0.00, rolling v<1 0.00, v>=1 0.00); ACC_07 Anhalten total 0.00s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [+0.06..+0.44]
+
+==============================================================================================================
+SCENARIO uphill5_lag0.50_dither0.15
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 1.16s v0.06-0.49 acc<0 0.82s first -0.64
+   Q2 HMS changes at standstill: +0.52:4->1 +0.92:1->4 | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.10s longest 6.10s runs 1 first 0.92 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.42s (with A6 Anhalten 6.08s, with A6 Anfahren 0.34s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.28, rolling v<1 0.12, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>4>1>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.52 v=0.01 raw=0.03 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.43
+     +0.92 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.21 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 1.16s v0.06-0.49 acc<0 0.82s first -0.64
+   Q2 HMS changes at standstill: +0.52:4->1 +0.92:1->4 | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.10s longest 6.10s runs 1 first 0.92 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.42s (with A6 Anhalten 6.08s, with A6 Anfahren 0.34s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.28, rolling v<1 0.12, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.52 v=0.01 raw=0.03 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.43 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 1.16s v0.06-0.49 acc<0 0.82s first -0.64, stopping: 0.12s v0.07-0.15 acc<0 0.12s first +0.56
+   Q2 HMS changes at standstill: none | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.50s longest 6.50s runs 1 first 0.52 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.70s (with A6 Anhalten 6.36s, with A6 Anfahren 0.34s, min acc -1.21)
+   HMS1 total 0.00s (standstill 0.00, rolling v<1 0.00, v>=1 0.00); ACC_07 Anhalten total 0.00s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [+0.52..+0.90]
+
+==============================================================================================================
+SCENARIO uphill11_lag0.04_dither0.30
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.92s v0.06-0.49 acc<0 0.58s first -0.64, stopping: 0.50s v0.05-0.30 acc<0 0.50s first +0.46
+   Q2 HMS changes at standstill: +0.06:4->1 | rolling v<1.0: -0.64:0->4@v0.49 +0.46:1->4@v0.14 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.56s longest 6.56s runs 1 first 0.46 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.16s (with A6 Anhalten 6.04s, with A6 Anfahren 0.12s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.12, rolling v<1 0.28, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>4>1>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.06 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.37
+     +0.46 v=0.14 raw=0.12 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.21 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.92s v0.06-0.49 acc<0 0.58s first -0.64, stopping: 0.50s v0.05-0.30 acc<0 0.50s first +0.46
+   Q2 HMS changes at standstill: +0.06:4->1 | rolling v<1.0: -0.64:0->4@v0.49 +0.46:1->4@v0.14 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.56s longest 6.56s runs 1 first 0.46 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.16s (with A6 Anhalten 6.04s, with A6 Anfahren 0.12s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.12, rolling v<1 0.28, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.06 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.37 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.92s v0.06-0.49 acc<0 0.58s first -0.64, stopping: 0.78s v0.05-0.30 acc<0 0.78s first +0.14
+   Q2 HMS changes at standstill: none | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.96s longest 6.96s runs 1 first 0.06 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.28s (with A6 Anhalten 6.16s, with A6 Anfahren 0.12s, min acc -1.21)
+   HMS1 total 0.00s (standstill 0.00, rolling v<1 0.00, v>=1 0.00); ACC_07 Anhalten total 0.00s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [+0.06..+0.44]
+
+==============================================================================================================
+SCENARIO uphill11_lag0.50_dither0.30
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 1.24s v0.06-0.49 acc<0 0.90s first -0.64, stopping: 0.30s v0.05-0.10 acc<0 0.30s first +3.06
+   Q2 HMS changes at standstill: +0.52:4->1 +0.92:1->4 | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.10s longest 6.10s runs 1 first 0.92 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.04s (with A6 Anhalten 5.78s, with A6 Anfahren 0.26s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.24, rolling v<1 0.16, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>4>1>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.52 v=0.01 raw=0.06 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.43
+     +0.92 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.21 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 1.24s v0.06-0.49 acc<0 0.90s first -0.64, stopping: 0.30s v0.05-0.10 acc<0 0.30s first +3.06
+   Q2 HMS changes at standstill: +0.52:4->1 +0.92:1->4 | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.10s longest 6.10s runs 1 first 0.92 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.04s (with A6 Anhalten 5.78s, with A6 Anfahren 0.26s, min acc -1.21)
+   HMS1 total 0.40s (standstill 0.24, rolling v<1 0.16, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>4>0
+     -4.00 v=3.50 raw=3.50 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -3.98 v=3.49 raw=3.48 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.20
+     -0.64 v=0.49 raw=0.49 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.41
+     +0.52 v=0.01 raw=0.06 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.43 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 1.24s v0.06-0.49 acc<0 0.90s first -0.64, stopping: 0.46s v0.05-0.30 acc<0 0.46s first +0.54
+   Q2 HMS changes at standstill: none | rolling v<1.0: -0.64:0->4@v0.49 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 6.50s longest 6.50s runs 1 first 0.52 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.28s (with A6 Anhalten 6.02s, with A6 Anfahren 0.26s, min acc -1.21)
+   HMS1 total 0.00s (standstill 0.00, rolling v<1 0.00, v>=1 0.00); ACC_07 Anhalten total 0.00s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [+0.52..+0.90]
+
+==============================================================================================================
+SCENARIO downhill6_stop_at_v1.10
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 3.60s v0.05-0.93 acc<0 3.60s first -3.68, pid: 0.34s v0.07-0.49 acc<0 0.00s first +7.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -3.68:1->4@v0.93 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 10.70s longest 10.70s runs 1 first -3.68 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 7.08s (with A6 Anhalten 7.08s, with A6 Anfahren 0.00s, min acc -1.25)
+   HMS1 total 2.00s (standstill 0.00, rolling v<1 0.56, v>=1 1.44); ACC_07 Anhalten total 2.00s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>0
+     -8.00 v=3.01 raw=3.01 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -7.98 v=2.98 raw=2.95 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -5.68 v=1.11 raw=1.10 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.65
+     -3.68 v=0.93 raw=0.93 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.25 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 3.60s v0.05-0.93 acc<0 3.60s first -3.68, pid: 0.34s v0.07-0.49 acc<0 0.00s first +7.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -3.68:1->4@v0.93 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 10.70s longest 10.70s runs 1 first -3.68 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 7.08s (with A6 Anhalten 7.08s, with A6 Anfahren 0.00s, min acc -1.25)
+   HMS1 total 2.00s (standstill 0.00, rolling v<1 0.56, v>=1 1.44); ACC_07 Anhalten total 2.00s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>1>4>1>4>1>4>0
+     -8.00 v=3.01 raw=3.01 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -7.98 v=2.98 raw=2.95 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -5.68 v=1.11 raw=1.10 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.65
+     -4.44 v=1.00 raw=1.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.25 L4
+     -4.42 v=1.01 raw=1.02 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-1.25
+     -4.30 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.25 L4
+     -4.22 v=1.00 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-1.25
+     -4.20 v=1.00 raw=1.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.25 L4
+     -4.14 v=1.02 raw=1.03 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-1.25
+     -4.08 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.25 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 4.16s v0.05-1.00 acc<0 4.16s first -4.44, pid: 0.34s v0.07-0.49 acc<0 0.00s first +7.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -4.44:1->4@v1.00 -4.30:1->4@v0.99 -4.20:1->4@v1.00 -4.08:1->4@v0.99 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 11.26s longest 11.10s runs 4 first -4.44 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 7.08s (with A6 Anhalten 7.08s, with A6 Anfahren 0.00s, min acc -1.25)
+   HMS1 total 1.44s (standstill 0.00, rolling v<1 0.00, v>=1 1.44); ACC_07 Anhalten total 1.44s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.56s in 4 windows [-4.44..-4.44] [-4.30..-4.24] [-4.20..-4.16] [-4.08..-3.70]
+
+==============================================================================================================
+SCENARIO downhill6_stop_at_v0.40
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>4>0>4>0>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.94s v0.07-0.50 acc<0 0.60s first -1.80, stopping: 0.66s v0.05-0.25 acc<0 0.66s first -0.74
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.80:0->4@v0.49 -1.76:4->0@v0.50 -1.74:0->4@v0.49 -1.70:4->0@v0.50 -1.66:0->4@v0.48 -1.14:4->1@v0.38 -0.74:1->4@v0.25 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 7.76s longest 7.76s runs 1 first -0.74 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 7.08s (with A6 Anhalten 7.08s, with A6 Anfahren 0.00s, min acc -1.20)
+   HMS1 total 0.40s (standstill 0.00, rolling v<1 0.40, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>4>0>4>0>4>1>4>0
+     -8.00 v=3.01 raw=3.01 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -7.98 v=2.98 raw=2.95 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -1.80 v=0.49 raw=0.48 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.26
+     -1.76 v=0.50 raw=0.51 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.26
+     -1.74 v=0.49 raw=0.50 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.26
+     -1.70 v=0.50 raw=0.49 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.26
+     -1.66 v=0.48 raw=0.47 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.26
+     -1.14 v=0.38 raw=0.39 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.36
+     -0.74 v=0.25 raw=0.26 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.20 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.94s v0.07-0.50 acc<0 0.60s first -1.80, stopping: 0.66s v0.05-0.25 acc<0 0.66s first -0.74
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.80:0->4@v0.49 -1.76:4->0@v0.50 -1.74:0->4@v0.49 -1.70:4->0@v0.50 -1.66:0->4@v0.48 -1.14:4->1@v0.38 -0.74:1->4@v0.25 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 7.76s longest 7.76s runs 1 first -0.74 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 7.08s (with A6 Anhalten 7.08s, with A6 Anfahren 0.00s, min acc -1.20)
+   HMS1 total 0.40s (standstill 0.00, rolling v<1 0.40, v>=1 0.00); ACC_07 Anhalten total 0.40s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>4>0>4>0>4>0
+     -8.00 v=3.01 raw=3.01 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -7.98 v=2.98 raw=2.95 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.60
+     -1.80 v=0.49 raw=0.48 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.26
+     -1.76 v=0.50 raw=0.51 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.26
+     -1.74 v=0.49 raw=0.50 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.26
+     -1.70 v=0.50 raw=0.49 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-0.26
+     -1.66 v=0.48 raw=0.47 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.26
+     -1.14 v=0.38 raw=0.39 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.36 L4
+     +7.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: pid: 0.94s v0.07-0.50 acc<0 0.60s first -1.80, stopping: 1.06s v0.05-0.39 acc<0 1.06s first -1.14
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.80:0->4@v0.49 -1.76:4->0@v0.50 -1.74:0->4@v0.49 -1.70:4->0@v0.50 -1.66:0->4@v0.48 +8.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 8.16s longest 8.16s runs 1 first -1.14 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 7.08s (with A6 Anhalten 7.08s, with A6 Anfahren 0.00s, min acc -1.20)
+   HMS1 total 0.00s (standstill 0.00, rolling v<1 0.00, v>=1 0.00); ACC_07 Anhalten total 0.00s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [-1.14..-0.76]
+
+==============================================================================================================
+SCENARIO chatter_at_standstill
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>1>4>1>4>1>4>1>4>1>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +1.16:4->1 +1.56:1->4 +2.82:4->1 +3.22:1->4 +4.06:4->1 +4.46:1->4 +5.52:4->1 +5.92:1->4 +6.12:4->1 +6.52:1->4 +8.22:4->1 +8.62:1->4 | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 9.30s longest 2.98s runs 7 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 8.24s (with A6 Anhalten 7.80s, with A6 Anfahren 0.44s, min acc -1.25)
+   HMS1 total 2.82s (standstill 2.40, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 2.82s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>1>4>1>4>1>4>1>4>1>4>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+     +1.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.15
+     +1.16 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.12
+     +1.56 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.20 L4
+     +2.52 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.10
+     +2.82 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.28
+     +3.22 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.24 L4
+     +4.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.05
+     +4.06 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.12
+     +4.46 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.20 L4
+     +5.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.30
+     +5.52 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.18
+     +5.92 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.20 L4
+     +6.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.05
+     +6.12 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.23
+     +6.52 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.25 L4
+     +8.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.22 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.18
+     +8.62 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.20 L4
+    +11.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +1.16:4->1 +1.56:1->4 +2.82:4->1 +3.22:1->4 +4.06:4->1 +4.46:1->4 +5.52:4->1 +5.92:1->4 +6.12:4->1 +6.52:1->4 +8.22:4->1 +8.62:1->4 | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 9.30s longest 2.98s runs 7 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 8.24s (with A6 Anhalten 7.80s, with A6 Anfahren 0.44s, min acc -1.25)
+   HMS1 total 2.82s (standstill 2.40, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 2.82s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+     +1.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.15
+     +1.16 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.12 L4
+     +2.52 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.10
+     +2.82 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.28 L4
+     +4.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.05
+     +4.06 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.12 L4
+     +5.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.30
+     +5.52 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.18 L4
+     +6.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=-0.05
+     +6.12 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.23 L4
+     +8.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+     +8.22 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.18 L4
+    +11.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.80s v0.05-0.99 acc<0 1.80s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -2.36:1->4@v0.99 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.10s longest 3.38s runs 7 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.64s (with A6 Anhalten 10.20s, with A6 Anfahren 0.44s, min acc -1.25)
+   HMS1 total 0.02s (standstill 0.00, rolling v<1 0.00, v>=1 0.02); ACC_07 Anhalten total 0.02s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 2.80s in 7 windows [-2.36..-1.98] [+1.16..+1.54] [+2.82..+3.20] [+4.06..+4.44] [+5.52..+5.90] [+6.12..+6.50] [+8.22..+8.60]
+
+==============================================================================================================
+SCENARIO brake_during_stop
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>1>0>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +3.02:4->1 +3.04:1->0 +8.00:0->4 | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 7.98s longest 4.98s runs 2 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.58s (with A6 Anhalten 6.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.44s (standstill 0.02, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>1>0>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+     +3.02 v=-0.00 raw=0.00 la=0 lcs=stop stp=1 go=0 HMS=1 A6=.. A7=.. d=20.46 st=2 acc=+3.01 L4
+     +3.04 v=-0.00 raw=0.00 la=0 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=2 acc=+3.01 L4
+     +8.00 v=-0.00 raw=0.00 la=1 lcs=off  stp=0 go=0 HMS=4 A6=.. A7=.G d=20.46 st=3 acc=-0.06 L4
+     +8.02 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.18 L4
+    +11.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +3.02:4->1 +3.04:1->0 +8.00:0->4 | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 7.98s longest 4.98s runs 2 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.58s (with A6 Anhalten 6.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.44s (standstill 0.02, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>1>0>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+     +3.02 v=-0.00 raw=0.00 la=0 lcs=stop stp=1 go=0 HMS=1 A6=.. A7=.. d=20.46 st=2 acc=+3.01 L4
+     +3.04 v=-0.00 raw=0.00 la=0 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=2 acc=+3.01 L4
+     +8.00 v=-0.00 raw=0.00 la=1 lcs=off  stp=0 go=0 HMS=4 A6=.. A7=.G d=20.46 st=3 acc=-0.06 L4
+     +8.02 v=-0.00 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.18 L4
+    +11.02 v=-0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.80s v0.05-0.99 acc<0 1.80s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +3.02:4->1 +3.04:1->0 +8.00:0->4 | rolling v<1.0: -2.36:1->4@v0.99 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 8.38s longest 5.38s runs 2 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.58s (with A6 Anhalten 6.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.04s (standstill 0.02, rolling v<1 0.00, v>=1 0.02); ACC_07 Anhalten total 0.02s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [-2.36..-1.98]
+
+==============================================================================================================
+SCENARIO long_stop_30s
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +30.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +31.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 31.98s longest 31.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 30.56s (with A6 Anhalten 30.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+    +30.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +31.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +30.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +31.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 31.98s longest 31.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 30.56s (with A6 Anhalten 30.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+    +30.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +31.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.80s v0.05-0.99 acc<0 1.80s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +30.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -2.36:1->4@v0.99 +31.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 32.38s longest 32.38s runs 1 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 30.56s (with A6 Anhalten 30.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.02s (standstill 0.00, rolling v<1 0.00, v>=1 0.02); ACC_07 Anhalten total 0.02s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [-2.36..-1.98]
+
+==============================================================================================================
+SCENARIO rollback_while_stopped_0.4
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 2.50s v0.05-0.67 acc<0 2.50s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.98s longest 12.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.46s (with A6 Anhalten 10.46s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+    +11.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 2.50s v0.05-0.67 acc<0 2.50s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.98s longest 12.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.46s (with A6 Anhalten 10.46s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+    +11.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 2.90s v0.05-0.99 acc<0 2.90s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -2.36:1->4@v0.99 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 13.38s longest 13.38s runs 1 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.46s (with A6 Anhalten 10.46s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.02s (standstill 0.00, rolling v<1 0.00, v>=1 0.02); ACC_07 Anhalten total 0.02s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.40s in 1 windows [-2.36..-1.98]
+
+==============================================================================================================
+SCENARIO rollback_while_stopped_1.2
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.74s v0.05-0.97 acc<0 1.74s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +5.24:1->4 | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.12s longest 6.34s runs 2 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.36s (with A6 Anhalten 10.36s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 1.28s (standstill 0.04, rolling v<1 0.76, v>=1 0.48); ACC_07 Anhalten total 1.28s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+     +4.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-1.23
+     +5.24 v=-0.02 raw=0.00 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+    +11.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.74s v0.05-0.97 acc<0 1.74s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: +5.24:1->4 | rolling v<1.0: -1.96:1->4@v0.67 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.12s longest 6.34s runs 2 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.36s (with A6 Anhalten 10.36s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 1.28s (standstill 0.04, rolling v<1 0.76, v>=1 0.48); ACC_07 Anhalten total 1.28s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+     +4.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-1.23
+     +4.84 v=0.97 raw=0.97 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+    +11.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+0.20
+    +12.00 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 2.50s v0.05-0.99 acc<0 2.50s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +11.66
+   Q2 HMS changes at standstill: none | rolling v<1.0: -2.36:1->4@v0.99 +4.84:1->4@v0.97 +12.00:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 12.92s longest 6.74s runs 2 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 10.40s (with A6 Anhalten 10.40s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.48s (standstill 0.00, rolling v<1 0.00, v>=1 0.48); ACC_07 Anhalten total 0.48s
+   DIFF HLF vs PAR: 0.00s in 0 windows 
+   DIFF PAR vs T0: 0.80s in 2 windows [-2.36..-1.98] [+4.84..+5.22]
+
+==============================================================================================================
+SCENARIO HYPO_esp_hold_confirms
+-- HLF (hms_latch_fix, timeout 20)  HMS seq: 0>1>4>0
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +6.86
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +7.20:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 7.98s longest 7.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.56s (with A6 Anhalten 6.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- PAR (claude/determined-hypatia-pnidyz, timeout 20)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -1.96 v=0.67 raw=0.67 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-1.23 L4
+     +6.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+1.50
+     +7.20 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.40s v0.05-0.67 acc<0 1.40s first -1.96, pid: 0.34s v0.07-0.49 acc<0 0.00s first +6.86
+   Q2 HMS changes at standstill: none | rolling v<1.0: -1.96:1->4@v0.67 +7.20:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 7.98s longest 7.98s runs 1 first -1.96 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.56s (with A6 Anhalten 6.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.42s (standstill 0.00, rolling v<1 0.40, v>=1 0.02); ACC_07 Anhalten total 0.42s
+-- T0 (hold_tsk_owned, timeout 0)  HMS seq: 0>1>4>0
+     -6.00 v=5.60 raw=5.60 la=1 lcs=off  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -5.98 v=5.58 raw=5.58 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=-1.70
+     -2.38 v=1.01 raw=1.01 la=1 lcs=stop stp=1 go=0 HMS=1 A6=S. A7=S. d= 0.30 st=3 acc=-0.75
+     -2.36 v=0.99 raw=0.99 la=1 lcs=stop stp=1 go=0 HMS=4 A6=S. A7=.G d=20.46 st=3 acc=-0.87 L4
+     +6.02 v=0.00 raw=0.00 la=1 lcs=pid  stp=0 go=1 HMS=4 A6=.G A7=.G d=20.46 st=3 acc=+1.50
+     +7.20 v=0.52 raw=0.52 la=1 lcs=pid  stp=0 go=0 HMS=0 A6=.. A7=.. d=20.46 st=3 acc=+1.40
+   Q1 HMS4+A7Anfahren while rolling 0.05<v<1.0: stopping: 1.80s v0.05-0.99 acc<0 1.80s first -2.36, pid: 0.34s v0.07-0.49 acc<0 0.00s first +6.86
+   Q2 HMS changes at standstill: none | rolling v<1.0: -2.36:1->4@v0.99 +7.20:4->0@v0.52
+   Q3 A6 Anhalten with A7 Anfahren/HMS4: total 8.38s longest 8.38s runs 1 first -2.36 | reverse (A6 Anfahren with A7 Anhalten/HMS1): 0.00s
+   Q4 start request (HMS4/A7G/A6G) with accel<0 at standstill: 6.56s (with A6 Anhalten 6.56s, with A6 Anfahren 0.00s, min acc -1.23)
+   HMS1 total 0.02s (standstill 0.00, rolling v<1 0.00, v>=1 0.02); ACC_07 Anhalten total 0.02s
+   DIFF HLF vs PAR: 0.82s in 1 windows [+6.00..+6.80]
+   DIFF PAR vs T0: 0.40s in 1 windows [-2.36..-1.98]
+
