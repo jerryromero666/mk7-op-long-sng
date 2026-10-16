@@ -69,6 +69,21 @@ class MQBStandstillManager:
   """
 
   HOLD_REQUEST_TIMEOUT = 20    # frames of HMS=1 before fallback to HMS=4 (~400ms at 50Hz)
+  # Early stop announcement (hill hold): announce every stop while the car still rolls, started by
+  # speed instead of OP's stopping state, which starts late on hills (at or after the wheels stop,
+  # so the parent's HMS=1 window fell at standstill with 0 TSK torque: 0.11 m rollback at +11.2%).
+  # The TSK only owns the hold after HMS=4 if the ESP ran its ACC stopping procedure (bit 63) first;
+  # without it HMS=4 at standstill faulted (hold_tsk_owned, routes 337/338). As in RJWadley's
+  # standstill-workaround (MqbLongStateMachine): the announcement ends as soon as the ESP reports
+  # bit 63, and during it ACC_06 says Anfahren (not Anhalten) so the TSK keeps its brake torque
+  # instead of dropping it to 0. The announced stop latches HMS=4 only if bit 63 was seen; otherwise,
+  # and for stops that could not be announced while rolling (re-engaging at standstill), the parent
+  # state machine below runs unchanged. RJ's rollback guard is not used: it reads the ESP_10 wheel
+  # direction, which is not valid on this car (half the codes are 'invalid', 'backward' while driving).
+  ANNOUNCE_SPEED = 2.6         # m/s (RJ ESP_OVERRIDE_SPEED): start the announcement below this while braking
+  ANNOUNCE_MIN_SPEED = 0.5     # m/s: never announce slower, so it always ends before the wheels stop
+  ANNOUNCE_FRAMES = 20         # 0.4 s at 50 Hz: the window in front of every fault-free hold (332/333)
+  RELEASE_SPEED = 2.6          # m/s: the announced stop ends once driving again (RJ ESP_OVERRIDE_SPEED)
   UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
 
   def __init__(self, CCP):
@@ -78,6 +93,10 @@ class MQBStandstillManager:
     self._hold_acquired = False  # latches True once hold confirms; prevents re-requesting
     self._hold_lost_frames = 0   # frames since hold last confirmed; resets _hold_acquired after timeout
     self._hms4_latched = False   # once HMS=4 at standstill, hold it steady (see update)
+    self._announce_frames = 0    # HMS=1 frames sent in the early announcement of this stop
+    self._announce_seen = False  # ESP bit 63 seen during that announcement
+    self._stop_announced = False # this stop's announcement is over (until vEgo > RELEASE_SPEED)
+    self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
 
   def update(self, CS, long_active: bool, accel: float, stopping: bool, starting: bool
              ) -> tuple[bool, float, bool, bool, bool | None, bool | None]:
@@ -107,6 +126,29 @@ class MQBStandstillManager:
     # Clamped to ACCEL_MAX so raising UPHILL_ACCEL_FLOOR can never trip panda safety.
     if long_active and accel > 0 and self._prev_hold_confirmation and at_standstill:
       accel = min(max(accel, self.UPHILL_ACCEL_FLOOR), self._CCP.ACCEL_MAX)
+
+    # Early stop announcement (see the class constants).
+    v = CS.out.vEgo
+    if not hms_active or v > self.RELEASE_SPEED:
+      self._announce_frames = 0
+      self._announce_seen = False
+      self._stop_announced = False
+      self._announced_hold = False
+    if hms_active and not self._stop_announced and not starting:
+      if self._announce_frames > 0 or (self.ANNOUNCE_MIN_SPEED <= v < self.ANNOUNCE_SPEED and (accel < 0 or stopping)):
+        if self._announce_frames > 0:   # bit 63 counts only as an answer to our HMS 1
+          self._announce_seen = self._announce_seen or bool(getattr(CS, 'esp_stopping', False))
+        if self._announce_seen or self._announce_frames >= self.ANNOUNCE_FRAMES or v < self.ANNOUNCE_MIN_SPEED:
+          self._stop_announced = True
+          self._announced_hold = self._announce_seen
+        else:
+          self._announce_frames += 1
+          self._prev_hold_confirmation = CS.esp_hold_confirmation
+          # HMS 1, ACC_07 Anhalten, d 0.3; ACC_06 Anfahren so the TSK keeps brake torque (RJ)
+          return long_active, accel, False, True, False, True
+    if hms_active and self._announced_hold:
+      self._prev_hold_confirmation = CS.esp_hold_confirmation
+      return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
 
     # HMS=4 LATCH.
     # Drive data (0000022b, 5.6% grade) shows the ESP tolerates a long steady HMS=4 --
