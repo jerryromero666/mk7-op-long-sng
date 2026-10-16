@@ -277,6 +277,14 @@ def analyze(route, segs, brief=False):
     row['v4'] = float(at(ct, cv, tm + 4.0))
     reach = np.where(w4 & (cv >= 5.0))[0]
     row['t5'] = ct[reach[0]] - tm if len(reach) else np.nan
+    # 5 -> 25 mph pick-up: time from 2.2 to 11.2 m/s, only if the car got there within 20 s without slowing
+    w20 = (ct >= tm) & (ct <= tm + 20.0)
+    k5, k25 = np.where(w20 & (cv >= 2.2))[0], np.where(w20 & (cv >= 11.2))[0]
+    row['t525'] = np.nan
+    if len(k5) and len(k25):
+      seg = cv[k5[0]:k25[0] + 1]
+      if np.all(np.diff(seg) > -0.05) or np.min(seg[np.argmax(seg):]) >= seg.max() - 0.3:
+        row['t525'] = ct[k25[0]] - ct[k5[0]]
     row['gas'] = bool(gas[(ct >= tm - 2.0) & (ct <= tm + 4.0)].any())
     row['brake'] = bool(brk[(ct >= tm - 2.0) & (ct <= tm + 4.0)].any())
     row['exp'] = bool(at(ss_t, ss_exp, tm)) if len(ss_t) else False
@@ -292,7 +300,8 @@ def analyze(route, segs, brief=False):
     flags = ''.join(f' {x}' for x, on in (('GAS', r['gas']), ('BRAKE', r['brake']), ('EXP', r['exp']),
                                            ('notLongActive', not r['long'])) if on)
     head = (f"  {i:2d} {clock(r['tm'])} stop {r['stop_s']:.0f}s planMax={fmt(r['planMax'])} actMax={fmt(r['actMax'])}"
-            f" act0.5={fmt(r['act05'])} act1={fmt(r['act1'])} v4={fmt(r['v4'], 1, 4)} to5={fmt(r['t5'], 1, 4)}")
+            f" act0.5={fmt(r['act05'])} act1={fmt(r['act1'])} v4={fmt(r['v4'], 1, 4)} to5={fmt(r['t5'], 1, 4)}"
+            f" 5-25mph={fmt(r['t525'], 1, 4)}s")
     if not r['lead'] or not np.isfinite(r.get('t_lead', np.nan)):
       print(head + ' nolead' + flags)
       continue
@@ -312,7 +321,7 @@ def analyze(route, segs, brief=False):
     print(f'MEDIAN of {len(clean)} openpilot launches behind a lead ({len(lead_rows) - len(clean)} with gas/brake or long off left out'
           f'{f", {n_exp} in Experimental mode" if n_exp else ""}):')
     print(f'  delay {med("delay")} plan {med("plan_go")} planMax {med("planMax")} actMax {med("actMax")}'
-          f' act0.5 {med("act05")} act1 {med("act1")} v4 {med("v4")} vL4 {med("vL4")} gap+4 {med("gap4")}'
+          f' act0.5 {med("act05")} act1 {med("act1")} v4 {med("v4")} vL4 {med("vL4")} gap+4 {med("gap4")} 5-25mph {med("t525")}s'
           f' | boost fired on {fired}/{len(clean)}')
 
   # ---- brake build-up: sharp drops in the accel command while moving and long active
