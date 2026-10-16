@@ -80,6 +80,56 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
+# Close follow while the lead pulls away at low speed. Behind a lead the MPC keeps
+# v^2/5 + t_follow*v + 6 m (the 6 m stop distance is compiled into the solver), so at 5-25 mph it
+# lets a departing car pull away (route 33d: gap at or under that 95-100% of the time on the slow
+# pickups, plan 0.1-0.6 m/s2 while the limit allowed 1.8). While leadOne moves (none at 1 m/s,
+# full at 3 m/s) and this car is not closing on it (none when 2 m/s faster than the lead, full at
+# 0.5 m/s), the lead obstacle is shifted forward (the car settles that much closer) and
+# t_follow is shortened, but never so far that the wanted gap drops under a stopping-distance
+# floor: if the lead brakes at CF_A_LEAD, this car reacts after CF_T_REACT and brakes at CF_A_EGO,
+# it still stops CF_D_MIN behind. The floor grows with speed, so the effect is largest at
+# 5-15 mph and gone by about 25 mph (aggressive). When the lead slows it goes back fast, so stops
+# keep the gap. leadTwo is usually the same car: both obstacles move, by the smaller of the two.
+# Live: /data/close_follow holds "<stop gap cut m> <t_follow s>" (default "3.0 0.9"; "0 1.75" = off).
+CF_DEFAULT = (3.0, 0.9)
+CF_FILE = '/data/close_follow'
+CF_CUT_LIMITS = (0.0, 4.0)   # m: the stop distance never goes below 2 m
+CF_TF_LIMITS = (0.8, 1.75)   # s: and t_follow is never longer than the personality's
+CF_LEAD_V = [1.0, 3.0]       # m/s lead speed: none .. full
+CF_CLOSING_V = [-2.0, -0.5]  # m/s lead speed minus this car's: none .. full
+CF_SOLVER_STOP_DISTANCE = 6.0  # compiled into c_generated_code (STOP_DISTANCE above is not)
+CF_T_REACT = 1.0             # s: floor reaction time
+CF_A_EGO = 3.0               # m/s2: floor braking of this car
+CF_A_LEAD = 5.0              # m/s2: floor braking of the lead
+CF_D_MIN = 2.5               # m: floor gap left when both have stopped
+CF_SHIFT_IN = 0.05           # m per update toward closer (1 m/s)
+CF_SHIFT_OUT = 0.25          # m per update back (5 m/s)
+CF_TF_IN = 0.01              # s per update shorter
+CF_TF_OUT = 0.05             # s per update back
+CF_FILE_PERIOD = 20          # updates between file reads
+
+
+def read_close_follow():
+  try:
+    with open(CF_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return CF_DEFAULT
+  if len(vals) != 2 or not all(np.isfinite(v) for v in vals):
+    return CF_DEFAULT
+  return float(np.clip(vals[0], *CF_CUT_LIMITS)), float(np.clip(vals[1], *CF_TF_LIMITS))
+
+
+def close_follow_weight(lead, v_ego, t_follow, cut_full):
+  # 0..1 share of the close follow allowed behind this lead (see CF_* above)
+  v_lead = max(lead.vLead, 0.0)
+  d_base = CF_SOLVER_STOP_DISTANCE + t_follow * v_ego + (v_ego**2 - v_lead**2) / (2 * COMFORT_BRAKE)
+  d_floor = CF_D_MIN + CF_T_REACT * v_ego + v_ego**2 / (2 * CF_A_EGO) - v_lead**2 / (2 * CF_A_LEAD)
+  return float(np.interp(v_lead, CF_LEAD_V, [0., 1.]) * np.interp(v_lead - v_ego, CF_CLOSING_V, [0., 1.]) *
+               np.clip((d_base - d_floor) / cut_full, 0.0, 1.0))
+
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -217,6 +267,10 @@ class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
     self.cruise_max_accel = CRUISE_MAX_ACCEL   # the planner raises it below 25 mph (pickup_accel.py)
+    self._cf = CF_DEFAULT
+    self._cf_cnt = 0
+    self._cf_shift = 0.0
+    self._cf_tf = None
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -336,6 +390,25 @@ class LongitudinalMpc:
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
     t_follow = get_T_FOLLOW(personality)
     v_ego = self.x0[1]
+
+    # close follow (see CF_* above)
+    if self._cf_cnt % CF_FILE_PERIOD == 0:
+      self._cf = read_close_follow()
+    self._cf_cnt += 1
+    cf_cut, cf_tf = self._cf
+    cut_full = cf_cut + max(t_follow - cf_tf, 0.0) * v_ego
+    w = 0.0
+    if radarstate.leadOne.status and cut_full > 0.0:
+      w = close_follow_weight(radarstate.leadOne, v_ego, t_follow, cut_full)
+      if radarstate.leadTwo.status:
+        w = min(w, close_follow_weight(radarstate.leadTwo, v_ego, t_follow, cut_full))
+    shift_target = cf_cut * w
+    tf_target = t_follow - max(t_follow - cf_tf, 0.0) * w
+    self._cf_shift += float(np.clip(shift_target - self._cf_shift, -CF_SHIFT_OUT, CF_SHIFT_IN))
+    if self._cf_tf is None:
+      self._cf_tf = t_follow
+    self._cf_tf = min(self._cf_tf + float(np.clip(tf_target - self._cf_tf, -CF_TF_IN, CF_TF_OUT)), t_follow)
+    t_follow = self._cf_tf
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
     lead_xv_0 = self.process_lead(radarstate.leadOne, 0)
@@ -344,8 +417,8 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
