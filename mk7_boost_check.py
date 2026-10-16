@@ -324,6 +324,47 @@ def analyze(route, segs, brief=False):
           f' act0.5 {med("act05")} act1 {med("act1")} v4 {med("v4")} vL4 {med("vL4")} gap+4 {med("gap4")} 5-25mph {med("t525")}s'
           f' | boost fired on {fired}/{len(clean)}')
 
+  # ---- 5-25 mph pickups: every climb from 2.2 to 11.2 m/s with long active and no pedals
+  print('PICKUP 5-25 mph (openpilot driving, no pedals): time, plan accel median/max, actual accel median/max,')
+  print('  "over cap" = share of plan frames above the old cap (only possible with the pickup change)')
+  picks = []
+  up = np.where((cv[:-1] < 2.2) & (cv[1:] >= 2.2))[0]
+  for i in up:
+    t_a = ct[i + 1]
+    k = i + 1
+    while k < len(cv) and cv[k] < 11.2 and cv[k] >= 1.8 and ct[k] - t_a < 25.0:
+      k += 1
+    if k >= len(cv) or cv[k] < 11.2:
+      continue
+    t_b = ct[k]
+    w = (ct >= t_a) & (ct <= t_b)
+    if gas[w].any() or brk[w].any():
+      continue
+    cw = (cc_t >= t_a) & (cc_t <= t_b)
+    if not cw.any() or not cc_act[cw].all():
+      continue
+    lw = (lp[:, 0] >= t_a) & (lp[:, 0] <= t_b) if len(lp) else np.zeros(0, bool)
+    pa = lp[lw, 1] if lw.any() else np.array([np.nan])
+    pv = np.interp(lp[lw, 0], ct, cv) if lw.any() else np.array([np.nan])
+    old_cap = np.minimum(np.interp(pv, [0., 10., 25., 40.], [1.6, 1.2, 0.8, 0.6]), 1.7)
+    over = float(np.mean(pa > old_cap + 0.05)) if lw.any() else np.nan
+    at_cap = float(np.mean(pa > old_cap - 0.05)) if lw.any() else np.nan
+    has_lead = False
+    if len(rs):
+      r0 = rs[np.searchsorted(rs[:, 0], t_a) - 1] if np.searchsorted(rs[:, 0], t_a) > 0 else rs[0]
+      has_lead = r0[1] > 0.5 and r0[2] < 60
+    picks.append(dict(t=t_a, dt=t_b - t_a, pmed=float(np.nanmedian(pa)), pmax=float(np.nanmax(pa)),
+                      amed=float(np.median(ca[w])), amax=float(np.max(ca[w])), over=over, cap=at_cap, lead=has_lead))
+  for pk in ([] if brief else picks[:15]):
+    print(f"  {clock(pk['t'])} {pk['dt']:4.1f}s  plan {pk['pmed']:4.2f}/{pk['pmax']:4.2f}  actual {pk['amed']:4.2f}/{pk['amax']:4.2f}"
+          f"  over cap {pk['over'] * 100:3.0f}%  at/over old cap {pk['cap'] * 100:3.0f}%  {'lead' if pk['lead'] else 'no lead'}")
+  if picks:
+    md = lambda key: st.median(x[key] for x in picks)
+    print(f"  MEDIAN of {len(picks)}: {md('dt'):.1f}s  plan {md('pmed'):.2f}/{md('pmax'):.2f}  actual {md('amed'):.2f}/{md('amax'):.2f}"
+          f"  over cap {md('over') * 100:.0f}%  at/over old cap {md('cap') * 100:.0f}%")
+  else:
+    print('  none')
+
   # ---- brake build-up: sharp drops in the accel command while moving and long active
   print('BRAKE BUILD-UP (cmd drops >= 1.0 in 0.5 s and reaches <= -0.5, moving >= 2 m/s, long active):')
   if len(cc_t) > 100:
