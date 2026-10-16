@@ -324,44 +324,72 @@ def analyze(route, segs, brief=False):
           f' act0.5 {med("act05")} act1 {med("act1")} v4 {med("v4")} vL4 {med("vL4")} gap+4 {med("gap4")} 5-25mph {med("t525")}s'
           f' | boost fired on {fired}/{len(clean)}')
 
-  # ---- 5-25 mph pickups: every climb from 2.2 to 11.2 m/s with long active and no pedals
-  print('PICKUP 5-25 mph (openpilot driving, no pedals): time, plan accel median/max, actual accel median/max,')
-  print('  "over cap" = share of plan frames above the old cap (only possible with the pickup change)')
+  # ---- 5-25 mph pickups: every climb from 5 mph with openpilot driving, until 25 mph or until the
+  # driver took over (gas/brake/OP off). 'gap vs wanted' compares the gap to the lead with the gap the
+  # MPC aims for (v^2/5 + t_follow*v + 6 m, the lead counted as v_lead^2/5 further): above 0 means
+  # openpilot thinks it is already close enough, so it will not accelerate harder whatever the limit.
+  print('PICKUP from 5 mph (openpilot driving, until 25 mph or the driver took over):')
+  print('  plan/actual = accel median/max m/s2; "at old cap" = plan frames at or above the old limit;')
+  print('  "too close" = share of time openpilot thought the car ahead was already close enough')
+  pers = sorted({r[3] for r in D['ss'] if r[1]})
+  t_follow = {'relaxed': 1.75, 'standard': 1.45, 'aggressive': 1.25}.get(pers[0] if pers else '', 1.45)
   picks = []
   up = np.where((cv[:-1] < 2.2) & (cv[1:] >= 2.2))[0]
   for i in up:
     t_a = ct[i + 1]
-    k = i + 1
-    while k < len(cv) and cv[k] < 11.2 and cv[k] >= 1.8 and ct[k] - t_a < 25.0:
+    if len(cc_t) == 0 or not at(cc_t, cc_act, t_a) or gas[i + 1] or brk[i + 1]:
+      continue
+    k, end = i + 1, 'time'
+    while k < len(cv):
+      if cv[k] >= 11.2:
+        end = 'reached 25 mph'; break
+      if gas[k]:
+        end = f'GAS at {cv[k] * 2.237:.0f} mph'; break
+      if brk[k]:
+        end = f'BRAKE at {cv[k] * 2.237:.0f} mph'; break
+      if not at(cc_t, cc_act, ct[k]):
+        end = f'OP off at {cv[k] * 2.237:.0f} mph'; break
+      if cv[k] < 1.8:
+        end = 'slowed again'; break
+      if ct[k] - t_a > 25.0:
+        break
       k += 1
-    if k >= len(cv) or cv[k] < 11.2:
-      continue
+    k = min(k, len(cv) - 1)
     t_b = ct[k]
-    w = (ct >= t_a) & (ct <= t_b)
-    if gas[w].any() or brk[w].any():
+    if t_b - t_a < 1.0:
       continue
-    cw = (cc_t >= t_a) & (cc_t <= t_b)
-    if not cw.any() or not cc_act[cw].all():
-      continue
-    lw = (lp[:, 0] >= t_a) & (lp[:, 0] <= t_b) if len(lp) else np.zeros(0, bool)
+    w = (ct >= t_a) & (ct < t_b)
+    lw = (lp[:, 0] >= t_a) & (lp[:, 0] < t_b) if len(lp) else np.zeros(0, bool)
     pa = lp[lw, 1] if lw.any() else np.array([np.nan])
     pv = np.interp(lp[lw, 0], ct, cv) if lw.any() else np.array([np.nan])
     old_cap = np.minimum(np.interp(pv, [0., 10., 25., 40.], [1.6, 1.2, 0.8, 0.6]), 1.7)
-    over = float(np.mean(pa > old_cap + 0.05)) if lw.any() else np.nan
-    at_cap = float(np.mean(pa > old_cap - 0.05)) if lw.any() else np.nan
-    has_lead = False
+    cap = float(np.mean(pa > old_cap - 0.05)) if lw.any() else np.nan
+    gaps, close, dv = [], [], []
     if len(rs):
-      r0 = rs[np.searchsorted(rs[:, 0], t_a) - 1] if np.searchsorted(rs[:, 0], t_a) > 0 else rs[0]
-      has_lead = r0[1] > 0.5 and r0[2] < 60
-    picks.append(dict(t=t_a, dt=t_b - t_a, pmed=float(np.nanmedian(pa)), pmax=float(np.nanmax(pa)),
-                      amed=float(np.median(ca[w])), amax=float(np.max(ca[w])), over=over, cap=at_cap, lead=has_lead))
-  for pk in ([] if brief else picks[:15]):
-    print(f"  {clock(pk['t'])} {pk['dt']:4.1f}s  plan {pk['pmed']:4.2f}/{pk['pmax']:4.2f}  actual {pk['amed']:4.2f}/{pk['amax']:4.2f}"
-          f"  over cap {pk['over'] * 100:3.0f}%  at/over old cap {pk['cap'] * 100:3.0f}%  {'lead' if pk['lead'] else 'no lead'}")
+      R = rs[(rs[:, 0] >= t_a) & (rs[:, 0] < t_b) & (rs[:, 1] > 0.5) & (rs[:, 2] < 80)]
+      if len(R) >= 5:
+        ve = np.interp(R[:, 0], ct, cv)
+        wanted = ve ** 2 / 5.0 + t_follow * ve + 6.0
+        have = R[:, 2] + R[:, 3] ** 2 / 5.0
+        gaps, close, dv = R[:, 2], (have - wanted) <= 0.5, R[:, 3] - ve
+    picks.append(dict(t=t_a, dt=t_b - t_a, end=end, v=float(cv[k]) * 2.237,
+                      pmed=float(np.nanmedian(pa)), pmax=float(np.nanmax(pa)),
+                      amed=float(np.median(ca[w])), amax=float(np.max(ca[w])), cap=cap,
+                      lead=len(gaps) > 0, gap=float(np.median(gaps)) if len(gaps) else np.nan,
+                      close=float(np.mean(close)) if len(gaps) else np.nan,
+                      dv=float(np.median(dv)) if len(gaps) else np.nan))
+  for pk in ([] if brief else picks[:20]):
+    lead = (f"lead gap {pk['gap']:4.1f} m, lead {pk['dv']:+.1f} m/s vs you, too close {pk['close'] * 100:3.0f}%"
+            if pk['lead'] else 'no lead')
+    print(f"  {clock(pk['t'])} {pk['dt']:4.1f}s to {pk['v']:2.0f} mph ({pk['end']})  plan {pk['pmed']:4.2f}/{pk['pmax']:4.2f}"
+          f"  actual {pk['amed']:4.2f}/{pk['amax']:4.2f}  at old cap {pk['cap'] * 100:3.0f}%  {lead}")
   if picks:
-    md = lambda key: st.median(x[key] for x in picks)
-    print(f"  MEDIAN of {len(picks)}: {md('dt'):.1f}s  plan {md('pmed'):.2f}/{md('pmax'):.2f}  actual {md('amed'):.2f}/{md('amax'):.2f}"
-          f"  over cap {md('over') * 100:.0f}%  at/over old cap {md('cap') * 100:.0f}%")
+    md = lambda key, L=picks: st.median(x[key] for x in L) if L else float('nan')
+    took = [x for x in picks if x['end'].startswith(('GAS', 'BRAKE', 'OP off'))]
+    led = [x for x in picks if x['lead']]
+    print(f"  MEDIAN of {len(picks)} ({len(took)} taken over): plan {md('pmed'):.2f}/{md('pmax'):.2f}  actual {md('amed'):.2f}"
+          f"  at old cap {md('cap') * 100:.0f}%" + (f"  | behind a lead ({len(led)}): too close {md('close', led) * 100:.0f}%,"
+          f" gap {md('gap', led):.1f} m" if led else '') + f"  (t_follow {t_follow})")
   else:
     print('  none')
 
