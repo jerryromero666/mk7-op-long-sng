@@ -80,10 +80,13 @@ class MQBStandstillManager:
   # and for stops that could not be announced while rolling (re-engaging at standstill), the parent
   # state machine below runs unchanged. RJ's rollback guard is not used: it reads the ESP_10 wheel
   # direction, which is not valid on this car (half the codes are 'invalid', 'backward' while driving).
-  ANNOUNCE_SPEED = 2.6         # m/s (RJ ESP_OVERRIDE_SPEED): start the announcement below this while braking
-  ANNOUNCE_MIN_SPEED = 0.5     # m/s: never announce slower, so it always ends before the wheels stop
+  # Route 33d (announcing at RJ's 2.6 m/s): once HMS=4 latched the car stopped slowing (2.59 -> 2.55
+  # m/s in 0.4 s with -0.8 asked) and the driver had to brake on every approach. HMS=4 only brakes weakly
+  # on this car, so it must latch at the parent's speed (it latched at 0.6-1.0 m/s and stopped fine).
+  ANNOUNCE_SPEED = 0.9         # m/s: start the announcement below this while braking (parent latched at 0.6-1.0)
+  ANNOUNCE_MIN_SPEED = 0.3     # m/s: never announce slower, so it always ends before the wheels stop
   ANNOUNCE_FRAMES = 20         # 0.4 s at 50 Hz: the window in front of every fault-free hold (332/333)
-  RELEASE_SPEED = 2.6          # m/s: the announced stop ends once driving again (RJ ESP_OVERRIDE_SPEED)
+  RELEASE_SPEED = 1.5          # m/s: the announced stop ends once driving again; a new slowdown re-announces
   UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
 
   def __init__(self, CCP):
@@ -146,7 +149,10 @@ class MQBStandstillManager:
           self._prev_hold_confirmation = CS.esp_hold_confirmation
           # HMS 1, ACC_07 Anhalten, d 0.3; ACC_06 Anfahren so the TSK keeps brake torque (RJ)
           return long_active, accel, False, True, False, True
-    if hms_active and self._announced_hold:
+    # If the ESP confirms its own hold (bit 53), never answer with HMS=4: route 33d #3 (+16%), 338 F1:
+    # bit 53 under HMS=4 with 0 TSK torque, dropped after ~1.5 s -> TSK fault. Route 33d #5: HMS=3 under
+    # bit 53 -> the ESP handed over within 0.04 s, HMS=4 and the TSK held. The parent's State 2 does that.
+    if hms_active and self._announced_hold and not CS.esp_hold_confirmation:
       self._prev_hold_confirmation = CS.esp_hold_confirmation
       return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
 
@@ -161,7 +167,7 @@ class MQBStandstillManager:
     if not at_standstill or starting:
       self._hms4_latched = False
 
-    if hms_active and at_standstill and self._hms4_latched and not starting:
+    if hms_active and at_standstill and self._hms4_latched and not starting and not CS.esp_hold_confirmation:
       esp_starting_override = True
       esp_stopping_override = False
     elif hms_active and at_standstill and stopping and not starting:
