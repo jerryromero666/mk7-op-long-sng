@@ -126,8 +126,9 @@ def close_follow_weight(lead, v_ego, t_follow, cut_full):
   v_lead = max(lead.vLead, 0.0)
   d_base = CF_SOLVER_STOP_DISTANCE + t_follow * v_ego + (v_ego**2 - v_lead**2) / (2 * COMFORT_BRAKE)
   d_floor = CF_D_MIN + CF_T_REACT * v_ego + v_ego**2 / (2 * CF_A_EGO) - v_lead**2 / (2 * CF_A_LEAD)
-  return float(np.interp(v_lead, CF_LEAD_V, [0., 1.]) * np.interp(v_lead - v_ego, CF_CLOSING_V, [0., 1.]) *
-               np.clip((d_base - d_floor) / cut_full, 0.0, 1.0))
+  w = float(np.interp(v_lead, CF_LEAD_V, [0., 1.]) * np.interp(v_lead - v_ego, CF_CLOSING_V, [0., 1.]) *
+            np.clip((d_base - d_floor) / cut_full, 0.0, 1.0))
+  return w if np.isfinite(w) else 0.0  # a NaN / inf vLead must not latch _cf_shift and _cf_tf at NaN
 
 
 def get_stopped_equivalence_factor(v_lead):
