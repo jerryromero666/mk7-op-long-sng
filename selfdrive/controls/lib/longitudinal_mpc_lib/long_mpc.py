@@ -109,6 +109,53 @@ CF_TF_IN = 0.01              # s per update shorter
 CF_TF_OUT = 0.05             # s per update back
 CF_FILE_PERIOD = 20          # updates between file reads
 
+# Set speed ease at low set speeds. With no car ahead the MPC eases off toward the set speed very
+# early: with SET pressed at a stop (40 km/h) it leaves the pickup cap at ~14 mph and creeps up the
+# last 10 mph at ~0.4 m/s3 (the obstacle-distance cost makes that approach so soft; the jerk costs
+# and the cruise obstacle's shape hardly matter). Here the cruise fake obstacle aims above the set
+# speed while the speed still left is more than what rolling the MPC's accel off at EASE_JERK adds:
+#   target = v_cruise + min(EASE_GAIN * max(v_cruise - v - a^2 / (2 * EASE_JERK), 0), EASE_MAX)
+# with v, a the MPC's own speed and accel. The extra is gone before the set speed, so the plan
+# still ends at the set speed (sim: overshoot up to ~1.1 mph instead of ~0.8 with the car giving all
+# that is asked, ~0.6 instead of ~0.5 at the 90 % this car gives). It only
+# moves the cruise obstacle further away: wherever a lead obstacle is closer, the MPC still uses
+# the lead. Full for set speeds up to 30 mph, none from 39.6 mph (so SET at a stop = 64 km/h on
+# t2_set_min is exactly as before); nothing at or above the set speed.
+# EASE_JERK is for aggressive; standard and relaxed (twice the jerk cost) use half of it.
+# Live: /data/cruise_ease holds EASE_JERK in m/s3 (default 0.8; 0 = off, exactly as before;
+# more = holds the accel longer and rolls off later, with more overshoot: 1.0 -> up to 1.2 mph).
+EASE_DEFAULT = 0.8           # m/s3
+EASE_JERK_FACTOR = 0.5       # get_jerk_factor() that EASE_JERK is meant for (aggressive)
+EASE_FILE = '/data/cruise_ease'
+EASE_LIMITS = (0.0, 1.5)     # m/s3
+EASE_GAIN = 2.0              # m/s of extra target per m/s of speed left
+EASE_MAX = 3.0               # m/s
+EASE_V_CRUISE = [13.4, 17.7]  # m/s set speed (30 / 39.6 mph): full .. none (64 km/h = 17.78 m/s gets none)
+EASE_FILE_PERIOD = 20        # updates between file reads
+
+
+def read_cruise_ease():
+  try:
+    with open(EASE_FILE) as f:
+      val = float(f.read().strip())
+  except (OSError, ValueError):
+    return EASE_DEFAULT
+  if not np.isfinite(val):
+    return EASE_DEFAULT
+  return float(np.clip(val, *EASE_LIMITS))
+
+
+def cruise_ease_target(v_cruise, v_ego, a_ego, jerk):
+  # the cruise obstacle's target speed (see EASE_* above); v_cruise itself when off or not low speed
+  if jerk <= 0.0:
+    return v_cruise
+  fade = float(np.interp(v_cruise, EASE_V_CRUISE, [1.0, 0.0]))
+  a = max(a_ego, 0.0)
+  room = v_cruise - v_ego - a * a / (2 * jerk)
+  if fade <= 0.0 or room <= 0.0:
+    return v_cruise
+  return v_cruise + fade * min(EASE_GAIN * room, EASE_MAX)
+
 
 def read_close_follow():
   try:
@@ -271,6 +318,8 @@ class LongitudinalMpc:
     self._cf_cnt = 0
     self._cf_shift = 0.0
     self._cf_tf = None
+    self._ease = EASE_DEFAULT
+    self._ease_cnt = 0
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -395,6 +444,9 @@ class LongitudinalMpc:
     if self._cf_cnt % CF_FILE_PERIOD == 0:
       self._cf = read_close_follow()
     self._cf_cnt += 1
+    if self._ease_cnt % EASE_FILE_PERIOD == 0:
+      self._ease = read_cruise_ease()
+    self._ease_cnt += 1
     cf_cut, cf_tf = self._cf
     cut_full = cf_cut + max(t_follow - cf_tf, 0.0) * v_ego
     w = 0.0
@@ -425,7 +477,8 @@ class LongitudinalMpc:
     v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
     # TODO does this make sense when max_a is negative?
     v_upper = v_ego + (T_IDXS * self.cruise_max_accel * 1.05)
-    v_cruise_clipped = np.clip(v_cruise * np.ones(N+1), v_lower, v_upper)
+    ease_jerk = self._ease * EASE_JERK_FACTOR / get_jerk_factor(personality)
+    v_cruise_clipped = np.clip(cruise_ease_target(v_cruise, v_ego, self.x0[2], ease_jerk) * np.ones(N+1), v_lower, v_upper)
     cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow)
 
     x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
