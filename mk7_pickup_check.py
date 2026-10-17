@@ -3,7 +3,7 @@
 mk7_pickup_check.py - read-only: what held the acceleration back on every pickup from 5 mph (car OFF).
 
 INSTALL OR UPDATE (on the comma, over SSH):
-  cd /data/openpilot && git fetch sngrepo t2_close_follow && git show FETCH_HEAD:mk7_pickup_check.py > /data/mk7_pickup_check.py
+  cd /data/openpilot && git fetch sngrepo t2_set_min && git show FETCH_HEAD:mk7_pickup_check.py > /data/mk7_pickup_check.py
 
 RUN IT WITH THE CAR OFF:
 
@@ -17,7 +17,9 @@ RUN IT WITH THE CAR OFF:
 A pickup starts when the car passes 5 mph (2.2 m/s) going up, with openpilot driving and no pedal. It
 ends at 25 mph (11.2 m/s), at a set speed (or Speed Limit Assist limit) under 25 mph, when the driver
 presses gas or brake, when openpilot switches off, when the car slows under 4 mph (1.8 m/s) again, or
-after 25 s. It counts as 'lead' when radarState.leadOne was there (closer than 60 m) 20% of the time.
+after 25 s. It counts as 'behind a car' only when the car ahead mattered: it was at or under the MPC's wanted gap
+20% of the time, or it held the plan back (LEAD) or the MPC followed it (longitudinalPlanSource lead0 / lead1) a
+third of the time. Otherwise it is 'no car close ahead' (a car seen far ahead is shown with its median gap).
 For every planner frame (20 per second) it works out what held openpilot's planned accel back:
   CAP  the planner's accel cap (pickup cap from /data/pickup_accel, default 1.8; older branches: stock)
   THR  the driving model's gas prediction said "no throttle" (longitudinalPlan.allowThrottle off)
@@ -33,8 +35,14 @@ For every planner frame (20 per second) it works out what held openpilot's plann
 and compares the car with the plan: what went out in ACC_06, the cruise computer's (TSK) own target
 (Motor_20), TSK_06 TSK_Status (5 = brake only: no engine torque), the engine torque asked and delivered
 (Motor_11), the gear lever and the DSG's target gear (Getriebe_11), the wheel-speed slope and openpilot's
-aEgo. It also shows the set speed at the start: 40 km/h right after switching on = SET pressed under
-25 mph, and the MPC then eases off from about 14 mph. Only reads logs. Writes nothing.
+aEgo. car% = wheels / sent in steady state: only where the request held within 0.1 m/s2 for 0.5 s and the
+0.5 s after it, the wheels compared at the end (so the car's lag does not count as a shortfall). Also the TSK's
+comfort band (TSK_06 TSK_zul_Regelabw), the car's mass and the grade (Motor_16), and the factory radar's own ACC_06
+(received on bus 2 while openpilot drives) next to what openpilot sent: comfort band, ramp limits,
+ACC_DynErhoehung, ACC_limitierte_Anfahrdyn, ACC_Typ.
+It also shows the set speed at the start; * = the engage minimum, i.e. SET pressed at a stop / under the minimum:
+40 km/h (25 mph) stock, on t2_set_min 64 km/h (40 mph) or /data/set_min_mph x 1.6 km/h for SET under 10 mph and
+40 km/h for SET from 10 mph up (RES that restored an earlier set speed does not count). The MPC eases off about 11 mph under the set speed. Only reads logs. Writes nothing.
 """
 import sys
 sys.dont_write_bytecode = True   # never leave .pyc files behind on the device
@@ -47,13 +55,14 @@ import re        # noqa: E402
 import statistics as st  # noqa: E402
 import time      # noqa: E402
 
-TOOL_VERSION = '1.1 (2026-10-17)'
+TOOL_VERSION = '1.2 (2026-10-17)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
 REEXEC_FLAG = 'MK7_PICKUP_CHECK_REEXEC'
 ONROAD_PARAM = '/data/params/d/IsOnroad'
 PICKUP_FILE = '/data/pickup_accel'
+SET_MIN_FILE = '/data/set_min_mph'   # t2_set_min: the engage minimum in mph (selfdrive/car/set_min_speed.py)
 DBC_REL = ('opendbc_repo/opendbc/dbc/vw_mqb.dbc', 'opendbc/dbc/vw_mqb.dbc')
 ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 LIST_N = 8
@@ -68,11 +77,17 @@ V_END = 11.2           # m/s (25 mph): done
 V_SLOW = 1.8           # m/s: slowed down again
 V_20 = 8.94            # m/s (20 mph): 5->20 mph is timed too (a 25 mph set speed never gets to 25)
 V_CRUISE_INITIAL = 40.0   # km/h: what SET gives under 25 mph (selfdrive/car/cruise.py)
+# t2_set_min: SET under 10 mph gives max(40, round(/data/set_min_mph x 1.6)) km/h (no file = 40 mph), from 10 mph up stock
+SET_MIN_DEFAULT_MPH, SET_MIN_LIMITS, IMPERIAL_INCREMENT = 40.0, (25.0, 45.0), 1.6
+SET_MIN_BELOW = 16.09  # km/h (10 mph): only SET under this gets the t2_set_min minimum (selfdrive/car/set_min_speed.py)
+SET_MIN_BRANCHES = ('t2_set_min',)
 MAX_S = 25.0           # s
 MIN_S = 1.0            # s: shorter pickups are left out
 SET_MARGIN = 0.3       # m/s: "reached the set speed" when this close to a set speed under 25 mph
 LEAD_D = 60.0          # m: a lead closer than this counts
-LEAD_SHARE = 0.2       # a pickup is "lead" if a lead was there this share of the time
+LEAD_SHARE = 0.2       # a lead was "seen" if it was there this share of the time (far: only its gap is shown)
+CLOSE_SHARE = 0.2      # "behind a car": at or under the MPC's wanted gap this share of the pickup, or
+HELD_SHARE = 1 / 3     # the car ahead held the plan back (LEAD) or was the MPC's source (lead0/1) this share
 # the classification
 CAP_TOL = 0.05         # m/s2: plan within this of the cap = held by the cap
 CLIP_TOL = 0.02        # m/s2: plan this far under the MPC's own wish = clipped by the planner
@@ -80,7 +95,8 @@ COMP_TOL = 0.02        # m/s2: which part of the cap was lowest
 SET_NEAR = 6.5         # m/s: the MPC starts to ease off about 5 m/s under the set speed (sim)
 RAMP_RATE = 0.25       # m/s3: plan still rising this fast = the MPC is ramping up
 CLOSE_GAP = 2.0        # m: lead within this of the MPC's wanted gap = close
-CAR_LAG = 0.3          # s: the car's response compared with the request this much later
+CAR_LAG = 0.3          # s: the car's response compared with the request this much later (car% over all, paste only)
+STEADY_S, STEADY_LAG, STEADY_TOL = 0.5, 0.5, 0.1   # steady car%: request within 0.1 m/s2 for 0.5 s + the 0.5 s lag
 GATE = (0.2, 14.5)     # m/s: CAN is only kept while the car is in this speed range (memory, time)
 # the planner (selfdrive/controls/lib/longitudinal_planner.py, pickup_accel.py)
 T_IDXS = [10.0 * (i / 32.0) ** 2 for i in range(17)]   # ModelConstants.T_IDXS[:CONTROL_N]
@@ -95,10 +111,11 @@ PANDA_MAX = 2.0
 STEER_RATIO, WHEELBASE = 15.6, 2.62
 T_FOLLOW = {'aggressive': 1.25, 'standard': 1.45, 'relaxed': 1.75}
 BRANCH_CAP = {'t2_close_follow': 'pickup', 't2_hill_announce': 'pickup', 't2_accel_cap_launch': 'cap17',
-              't2_launch_kick': 'stock', 't2_launch_boost': 'stock'}
+              't2_launch_kick': 'stock', 't2_launch_boost': 'stock', 't2_set_min': 'pickup'}
 CAP_NAMES = {'pickup': 'pickup cap', 'stock': 'stock cap', 'cap17': '1.7 cap (t2_accel_cap_launch)'}
 SRC = {'cruise': 0, 'lead0': 1, 'lead1': 2, 'lead2': 3, 'e2e': 4}
 SPSRC = {'cruise': 0, 'sccVision': 1, 'sccMap': 2, 'speedLimitAssist': 3}
+BTN = {'setCruise': 1, 'decelCruise': 1, 'resumeCruise': 2, 'accelCruise': 2}   # 1 = SET-type, 2 = RES-type
 PERS = {'aggressive': 0, 'standard': 1, 'relaxed': 2}
 PERS_NAME = {v: k for k, v in PERS.items()}
 GEAR = {5: 'P', 6: 'R', 7: 'N', 8: 'D', 9: 'S', 10: 'E'}
@@ -127,16 +144,27 @@ CAR = [
   ('lever_tx', 'Getriebe_11', 'GE_Fahrstufe'),
   ('gear', 'Getriebe_11', 'GE_Zielgang'),
   ('grade', 'Motor_16', 'TSK_Steigung'),
+  ('mass', 'Motor_16', 'TSK_Fahrzeugmasse_02'),
+  ('tsk_band', 'TSK_06', 'TSK_zul_Regelabw'),
 ]
 RAW_KEYS = {'lever', 'lever_tx', 'gear', 'tsk_status'}
 # physical ranges outside which a value is an error / "no value" code (raw all-ones etc.), not a reading
 VALID = {'ws_fl': (0.0, 400.0), 'ws_fr': (0.0, 400.0), 'ws_rl': (0.0, 400.0), 'ws_rr': (0.0, 400.0),
-         'eng_req': (-400.0, 500.0), 'eng': (-400.0, 500.0), 'rpm': (0.0, 9000.0), 'grade': (-40.0, 40.0)}
+         'eng_req': (-400.0, 500.0), 'eng': (-400.0, 500.0), 'rpm': (0.0, 9000.0), 'grade': (-40.0, 40.0),
+         'mass': (500.0, 4000.0)}
 # key, message, signal (comma -> car: the ACC_06 echo the panda saw go out, or sendcan)
 OP = [
   ('cmd', 'ACC_06', 'ACC_Sollbeschleunigung_02'),
   ('dyn', 'ACC_06', 'ACC_DynErhoehung'),
 ]
+# ACC_06 fields compared between the factory radar's own frames (bus 2) and openpilot's: key, signal
+ACC_CMP = [
+  ('st', 'ACC_Status_ACC'), ('typ', 'ACC_Typ'), ('lo', 'ACC_zul_Regelabw_unten'), ('hi', 'ACC_zul_Regelabw_oben'),
+  ('pos', 'ACC_pos_Sollbeschl_Grad_02'), ('neg', 'ACC_neg_Sollbeschl_Grad_02'), ('dyn', 'ACC_DynErhoehung'),
+  ('lim', 'ACC_limitierte_Anfahrdyn'), ('acc', 'ACC_Sollbeschleunigung_02'),
+]
+ACC_ST = {0: 'off', 1: 'init', 2: 'standby', 3: 'active', 4: 'override', 5: 'cancelling', 6: 'fault', 7: 'fault'}
+RADAR_BUS_OFFSET = 2   # the factory radar's ACC_06: openpilot's bus + 2 (J533 harness: pt 0, powertrain 1, radar side 2)
 
 
 # car messages that may not be on this car's bus: what is lost without them
@@ -412,8 +440,9 @@ def interp_index(action_t):
 def read_route(rt, root, route, segs, want):
   """Only the fields needed, all segments of one drive. Times in s (logMonoTime). CAN keyed by (stream, address, src)."""
   np = rt.np
-  T = {'cs': Table(8), 'cc': Table(4), 'lp': Table(8), 'rs': Table(7), 'sp': Table(4), 'lpar': Table(2), 'ss': Table(4)}
-  cs_add, cc_add, lp_add = T['cs'].rows.append, T['cc'].rows.append, T['lp'].rows.append
+  T = {'cs': Table(8), 'cc': Table(5), 'lp': Table(8), 'rs': Table(7), 'sp': Table(4), 'lpar': Table(2), 'ss': Table(4),
+       'btn': Table(2)}
+  cs_add, cc_add, lp_add, btn_add = T['cs'].rows.append, T['cc'].rows.append, T['lp'].rows.append, T['btn'].rows.append
   rs_add, sp_add, lpar_add, ss_add = T['rs'].rows.append, T['sp'].rows.append, T['lpar'].rows.append, T['ss'].rows.append
   can = {}
   info = {'route': route, 'branch': '?', 'commit': '?', 'delay': NAN, 'steer_ratio': NAN, 'wheelbase': NAN, 'segs': 0,
@@ -454,6 +483,12 @@ def read_route(rt, root, route, segs, want):
           v = c.vEgo
           gate_on = GATE[0] <= v <= GATE[1]
           cs_n += 1
+          be = c.buttonEvents
+          if len(be):      # which button switched openpilot on: SET (set / minus) or RES (resume / plus)
+            for b in be:
+              k = BTN.get(str(b.type), 0)
+              if k:
+                btn_add((e.logMonoTime * 1e-9, k))
           if cs_n % 2 and not (c.gasPressed or c.brakePressed):   # 50 Hz is plenty; every pedal frame is kept
             continue
           cs_add((e.logMonoTime * 1e-9, v, c.aEgo, c.vCruise, c.steeringAngleDeg, c.gasPressed, c.brakePressed,
@@ -464,7 +499,7 @@ def read_route(rt, root, route, segs, want):
             continue
           c = e.carControl
           o = c.orientationNED
-          cc_add((e.logMonoTime * 1e-9, c.longActive, c.actuators.accel, o[1] if len(o) == 3 else NAN))
+          cc_add((e.logMonoTime * 1e-9, c.longActive, c.actuators.accel, o[1] if len(o) == 3 else NAN, c.enabled))
         elif w == 'longitudinalPlan':
           lp = e.longitudinalPlan
           sv, av = lp.speeds, lp.accels
@@ -577,7 +612,8 @@ def build(rt, dbc, can, svc, info):
   D.cs_t, D.v, D.aego, D.vcruise, D.steer = cs[:, 0], cs[:, 1], cs[:, 2], cs[:, 3], cs[:, 4]
   D.gas, D.brk = cs[:, 5] > 0.5, cs[:, 6] > 0.5
   cc = svc['cc']
-  D.cc_t, D.long, D.cc_a, D.pitch = cc[:, 0], cc[:, 1] > 0.5, cc[:, 2], cc[:, 3]
+  D.cc_t, D.long, D.cc_a, D.pitch, D.cc_en = cc[:, 0], cc[:, 1] > 0.5, cc[:, 2], cc[:, 3], cc[:, 4] > 0.5
+  D.btn_t, D.btn = svc['btn'][:, 0], svc['btn'][:, 1]
   lp = svc['lp']
   D.lp_t, D.aT, D.a_unc, D.a_pk = lp[:, 0], lp[:, 1], lp[:, 2], lp[:, 3]
   D.allow, D.src = lp[:, 4] > 0.5, lp[:, 6]
@@ -594,7 +630,8 @@ def build(rt, dbc, can, svc, info):
   if len(cc) < 100:
     D.notes.append((0, f'drive {dr}: carControl is not in the logs: cannot tell when openpilot drove (no pickups)'))
   if len(rs) < 0.5 * n_lp:
-    D.notes.append((0, f'drive {dr}: radarState is (mostly) not in the logs: leads unknown, pickups count as no lead'))
+    D.notes.append((0, f'drive {dr}: radarState is (mostly) not in the logs: leads unknown, a pickup counts as behind a'
+                       ' car only from the MPC\'s lead source'))
   if len(sp) < 0.5 * n_lp:
     D.notes.append((1, f'drive {dr}: longitudinalPlanSP is not in the logs: sunnypilot speed targets (SP) not seen'))
   if len(ss) == 0:
@@ -657,6 +694,27 @@ def build(rt, dbc, can, svc, info):
     if key == 'cmd':
       val[raw >= 2046] = NAN      # 3.01 = openpilot not asking / error codes
     D.c[key] = (x[0], val)
+  # ACC_06 side by side: what openpilot sent (same frames as above) and the factory radar's own ACC_06, a plain
+  # received frame on the radar side of the harness relay: openpilot's bus + 2 (bus 2 on this car). Never openpilot's
+  # echo (128+) or blocked frames (192+), and never bus 1: the gateway routes openpilot's own ACC_06 onto the
+  # powertrain CAN (bus 1 here, where Motor_11 / Getriebe_11 are read), so a 0x122 there is openpilot's, not the radar's
+  sig06 = dbc.get('ACC_06', (None, {}))[1]
+  radar_k = ('can', a06, op_bus + RADAR_BUS_OFFSET)
+  stock = can.get(radar_k)
+  if stock is not None and len(stock[0]) < 50:
+    stock = None
+  D.acc_op, D.acc_stock = {}, {}
+  for dst, src_x in ((D.acc_op, x), (D.acc_stock, stock)):
+    if src_x is None:
+      continue
+    for key, sname in ACC_CMP:
+      if sname in sig06:
+        raw, val = decode(np, src_x[1], sig06[sname])
+        if key == 'acc':
+          val[raw >= 2046] = NAN
+        dst[key] = (src_x[0], val)
+  if stock is not None:
+    D.srcs['ACC_06radar'] = f'bus {radar_k[2]}'
   t, c = D.c['cmd']
   if len(t):
     act = hold(np, D.cc_t, D.long.astype(float), t) > 0.5 if len(D.cc_t) else np.ones(len(t), bool)
@@ -849,6 +907,93 @@ def classify(D):
   D.code, D.mism = code, mism
 
 
+# ============================================================================================ set speed at engage
+def engage_times(D):
+  """When openpilot was switched on (carControl.enabled rising; longActive if enabled is never set)."""
+  np = D.np
+  on = D.cc_en if D.cc_en.any() else D.long
+  on = on.astype(np.int8)
+  return D.cc_t[1:][np.diff(on) > 0] if len(on) > 1 else np.zeros(0)
+
+
+def engages(D):
+  """Every switch-on: (t, speed km/h just before, set speed km/h just after, button 'set' / 'res' / '?' = not in
+  the logs, Experimental mode). card.py sets the speed on that step: SET (or minus) = the current speed but at least
+  the minimum, RES (or plus) = the last set speed."""
+  np = D.np
+  out = []
+  for t in engage_times(D):
+    v = hold(np, D.cs_t, D.v, [t], stale=0.5)[0] * 3.6
+    sk = hold(np, D.cs_t, D.vcruise, [t + 0.3], stale=1.0)[0]
+    if not (v == v and sk == sk and 0 < sk < 254):
+      continue
+    b = D.btn[(D.btn_t >= t - 1.0) & (D.btn_t <= t + 0.05)]
+    kind = '?' if not len(b) else ('res' if b[-1] == 2 else 'set')
+    x = bool(hold(np, D.ss_t, D.ss_exp.astype(float), [t], stale=2.0)[0] > 0.5) if len(D.ss_t) else False
+    out.append((float(t), float(v), float(sk), kind, x))
+  return out
+
+
+def set_min_kph(mph):
+  """selfdrive/car/cruise.py initialize_v_cruise on t2_set_min: max(40, file x 1.6), rounded to whole km/h."""
+  mph = min(max(mph, SET_MIN_LIMITS[0]), SET_MIN_LIMITS[1])
+  return max(V_CRUISE_INITIAL, float(round(mph * IMPERIAL_INCREMENT)))
+
+
+def gave_min(se, v, mk):
+  """True when set speed se (km/h) is what SET at v km/h gives from under the minimum: the drive's minimum mk under
+  10 mph (mk is 40 km/h on branches without the set minimum), the stock 40 km/h from 10 mph up (0.5 km/h either side
+  of 10 mph, where the car's own speed decides)."""
+  if abs(se - mk) < 0.6 and v < min(SET_MIN_BELOW + 0.5, mk - 1.0):
+    return True
+  return abs(se - V_CRUISE_INITIAL) < 0.6 and SET_MIN_BELOW - 0.5 <= v < V_CRUISE_INITIAL - 1.0
+
+
+def set_min_of(D, branch, file_mph, given_mph):
+  """The set speed SET gives at a stop on this drive (km/h), how it is known, and how many engages showed it.
+  Branches from before t2_set_min: 40 km/h. Else --set-min, else /data/set_min_mph now, else 40 mph on t2_set_min,
+  40 km/h on an unknown branch. The drive itself overrules all but --set-min: SET clearly under 10 mph gives
+  exactly the minimum (RES gives the last set speed, so only SET-button engages count; without button data two
+  engages must agree, and only on an unknown branch)."""
+  dr = rid(D.route)
+  old = branch in BRANCH_CAP and branch not in SET_MIN_BRANCHES
+  if old:
+    exp, how = V_CRUISE_INITIAL, 'branch'
+  elif given_mph is not None:
+    exp, how = set_min_kph(given_mph), 'given'
+  elif file_mph is not None:
+    exp, how = set_min_kph(file_mph), 'file'
+  elif branch in SET_MIN_BRANCHES:
+    exp, how = set_min_kph(SET_MIN_DEFAULT_MPH), 'nofile'
+  else:
+    exp, how = V_CRUISE_INITIAL, 'assumed'
+  hi = set_min_kph(SET_MIN_LIMITS[1]) + 0.5
+  cand = {'set': {}, '?': {}}
+  for _, v, sk, kind, x in D.engages:
+    if kind != 'res' and not x and v < min(sk - 1.0, SET_MIN_BELOW - 0.5) and V_CRUISE_INITIAL - 0.5 <= sk <= hi:
+      cand[kind][round(sk)] = cand[kind].get(round(sk), 0) + 1
+  seen, n = None, 0
+  if cand['set']:
+    seen, n = max(cand['set'].items(), key=lambda kv: kv[1])
+  elif cand['?']:
+    val, cnt = max(cand['?'].items(), key=lambda kv: kv[1])
+    if abs(val - exp) < 0.6 or (how == 'assumed' and cnt >= 2):
+      seen, n = val, cnt
+  if seen is None:
+    return exp, how, 0
+  if abs(seen - exp) < 0.6:
+    return exp, how + '+seen', n
+  told = {'file': f'/data/set_min_mph now gives {exp:.0f}', 'given': f'--set-min gives {exp:.0f}',
+          'branch': f'branch {branch} gives {exp:.0f}', 'nofile': f'no /data/set_min_mph gives {exp:.0f}',
+          'assumed': f'assumed {exp:.0f}'}[how]
+  if how == 'given':
+    D.notes.append((0, f'drive {dr}: SET under 10 mph gave {seen:.0f} km/h on {n} engage(s) but {told}: {exp:.0f} used'))
+    return exp, how, 0
+  D.notes.append((0 if how in ('file', 'nofile') else 1,
+                  f'drive {dr}: SET under 10 mph gave {seen:.0f} km/h on {n} engage(s), {told}: {seen:.0f} used'))
+  return float(seen), 'seen', n
+
+
 # ============================================================================================ pickups
 def find_pickups(D):
   np = D.np
@@ -866,9 +1011,10 @@ def find_pickups(D):
     with np.errstate(invalid='ignore'):
       vlim = np.where(np.isfinite(spv) & (spv > 0.1) & (sps == SPSRC['speedLimitAssist']), spv, NAN)
   up = np.where((cv[:-1] < V_START) & (cv[1:] >= V_START))[0] + 1
-  # when openpilot's long control last switched on (SET / RES pressed): carControl.longActive rising edges
-  on = D.long.astype(np.int8)
-  rise_t = D.cc_t[1:][np.diff(on) > 0] if len(on) > 1 else np.zeros(0)
+  # when openpilot was last switched on (SET / RES pressed): carControl.enabled rising edges
+  rise_t = engage_times(D)
+  eng_t = np.array([e[0] for e in D.engages])
+  mk = D.set_min
   picks = []
   for i in up:
     t_a = ct[i]
@@ -906,10 +1052,54 @@ def find_pickups(D):
     j = int(np.searchsorted(rise_t, t_a, side='right')) - 1
     set0 = float(D.vcruise[i]) if 0 < D.vcruise[i] < 254 else NAN       # km/h
     set1 = float(D.vcruise[k]) if 0 < D.vcruise[k] < 254 else NAN
+    # started at the engage minimum: the last switch-on gave exactly the minimum from under it (SET at a stop) and
+    # the set speed was not changed since; with no switch-on in the logs, the set speed at the start only. RES
+    # restores the earlier set speed (that is not the minimum's doing), except on the drive's first switch-on,
+    # where cruise.py has no earlier set speed and RES works like SET
+    je = int(np.searchsorted(eng_t, t_a, side='right')) - 1
+    if je >= 0 and not (j >= 0 and rise_t[j] > eng_t[je] + 0.05):   # (a later switch-on without a set speed: unknown)
+      _, ve, se, kind, _ = D.engages[je]
+      first = eng_t[je] <= rise_t[0] + 0.05       # the drive's first switch-on in the logs
+      at_min = (kind != 'res' or first) and gave_min(se, ve, mk) and abs(set0 - se) < 0.6
+    else:
+      at_min = abs(set0 - mk) < 0.6
     picks.append({'t_a': t_a, 't_b': t_b, 'why': why, 'v_end': float(cv[k]), 'set0': set0, 'set1': set1,
-                  'set40': bool(abs(set0 - V_CRUISE_INITIAL) < 0.3),     # SET pressed under 25 mph gives 40 km/h
-                  'eng_ago': float(t_a - rise_t[j]) if j >= 0 else NAN})
+                  'setmin': bool(at_min), 'eng_ago': float(t_a - rise_t[j]) if j >= 0 else NAN})
   return picks
+
+
+def behind_a_car(close, held, src_lead):
+  """A pickup counts as behind a car only if the car ahead mattered: at or under the MPC's wanted gap CLOSE_SHARE of
+  the time, or it held the plan back (LEAD) / was the MPC's lead source HELD_SHARE of the time. LEAD and the source
+  also count a car a little beyond the wanted gap (or slower and within 40 m), so they need the larger share."""
+  return close >= CLOSE_SHARE or held >= HELD_SHARE or src_lead >= HELD_SHARE
+
+
+def steady_ratio(D, t_a, t_b):
+  """(wheels / request, wheels / TSK target, steady samples) where the request was steady: within STEADY_TOL for
+  STEADY_S and through the STEADY_LAG after it, compared at the end of the window. NaN under 0.5 s of such data."""
+  np = D.np
+  w = int(round((STEADY_S + STEADY_LAG) / DT))
+  G = np.arange(t_a - STEADY_S - STEADY_LAG, t_b, DT)
+  if len(G) <= w or not len(D.g_t):
+    return NAN, NAN, 0
+  u = hold(np, *D.cmd, G, stale=0.1)
+  win = np.lib.stride_tricks.sliding_window_view(np.where(np.isfinite(u), u, NAN), w + 1)   # G[i] .. G[i + w]
+  with np.errstate(invalid='ignore'):
+    fin = np.isfinite(win).all(axis=1)
+    lo, hi = np.min(np.where(fin[:, None], win, 0.0), axis=1), np.max(np.where(fin[:, None], win, 0.0), axis=1)
+    ref = np.mean(np.where(fin[:, None], win, 0.0), axis=1)
+  end = G[w:]
+  y = grid_interp(np, D.g_t, D.a_whl, end)
+  ok = fin & (hi - lo <= STEADY_TOL) & (ref > 0.3) & np.isfinite(y) & (end >= t_a)
+  n = int(ok.sum())
+  if n < int(round(STEADY_S / DT)):
+    return NAN, NAN, n
+  car = float(np.sum(y[ok]) / np.sum(ref[ok]))
+  tt = hold(np, *D.c['tsk_target'], end - STEADY_LAG - STEADY_S / 2, stale=0.2)
+  okt = ok & np.isfinite(tt) & (tt > 0.3)
+  car_tsk = float(np.sum(y[okt]) / np.sum(tt[okt])) if okt.sum() >= int(round(STEADY_S / DT)) else NAN
+  return car, car_tsk, n
 
 
 def nmed(x):
@@ -934,11 +1124,17 @@ def analyse(D, pk, prof, pmax):
   pk['nf'] = nf
   pk['codes'] = np.bincount(D.code[m], minlength=len(CODES)) if nf else np.zeros(len(CODES), dtype=np.int64)
   pk['mism'] = int(D.mism[m].sum())
+  # the car ahead: seen (within 60 m), close (at or under the MPC's wanted gap), held the plan back (LEAD), or the
+  # MPC's own source (lead0 / lead1). Vision sees cars far ahead, so "seen" alone does not make it a lead pickup.
   pk['lead_share'] = float(np.mean(D.p_lead[m])) if nf else 0.0
-  pk['lead'] = pk['lead_share'] >= LEAD_SHARE
   room = D.p_room[m]
-  pk['close'] = float(np.mean(room[np.isfinite(room)] <= 0.5)) if np.isfinite(room).any() else NAN
+  with np.errstate(invalid='ignore'):
+    pk['close'] = float(np.mean(np.isfinite(room) & (room <= 0.5))) if nf else 0.0
+  pk['held'] = float(pk['codes'][C['LEAD']]) / nf if nf else 0.0
+  pk['src_lead'] = float(np.mean((D.src[m] == SRC['lead0']) | (D.src[m] == SRC['lead1']))) if nf else 0.0
+  pk['lead'] = behind_a_car(pk['close'], pk['held'], pk['src_lead'])
   pk['gap'] = nmed(D.p_d[m])
+  pk['far'] = not pk['lead'] and pk['lead_share'] >= LEAD_SHARE and pk['gap'] == pk['gap']
   pk['plan_med'], pk['plan_max'] = nmed(D.aT[m]), nmax(D.aT[m])
   pk['mpc_max'] = nmax(D.a_unc[m])
   pk['cap_med'] = nmed(D.c_s[m])
@@ -960,12 +1156,16 @@ def analyse(D, pk, prof, pmax):
   sm = np.where(np.isfinite(whl), sm, NAN)
   pk['whl_max'] = nmax(sm[7:-7]) if len(sm) > 20 else nmax(whl)
   pk['aego_med'], pk['aego_max'] = nmed(aego), nmax(aego)
-  # delivered: the car's mean accel over the pickup / the mean request CAR_LAG s earlier
+  # delivered, over the whole pickup (v1.1's car%, kept in the paste as carall): the car's mean accel / the mean
+  # request CAR_LAG s earlier. It counts the car's lag on every change of the request as a shortfall.
   El = E[E >= t_a + CAR_LAG]
   u = hold(np, *D.cmd, El - CAR_LAG, stale=0.1)
   y = grid_interp(np, D.g_t, D.a_whl, El) if len(D.g_t) else np.full(len(El), NAN)
   ok = np.isfinite(u) & np.isfinite(y)
-  pk['car'] = float(np.mean(y[ok]) / np.mean(u[ok])) if ok.sum() > 25 and np.mean(u[ok]) > 0.3 else NAN
+  pk['car_all'] = float(np.mean(y[ok]) / np.mean(u[ok])) if ok.sum() > 25 and np.mean(u[ok]) > 0.3 else NAN
+  # steady state (car%): only where the request held within STEADY_TOL for STEADY_S and through the STEADY_LAG
+  # after it; the wheels at the end of that window against the request in it (and the TSK's own target the same)
+  pk['car'], pk['car_tsk'], pk['car_n'] = steady_ratio(D, t_a, t_b)
   with np.errstate(invalid='ignore'):
     short = ok & (u > 0.5) & (y < u - 0.3)
   pk['car_short'] = float(short.sum() / max((ok & (u > 0.5)).sum(), 1)) if ok.any() else NAN
@@ -977,10 +1177,6 @@ def analyse(D, pk, prof, pmax):
     pk['tsk_gap'] = float(np.median(sent[st_] - tsk[st_])) if st_.sum() > 10 else NAN
   else:
     pk['tsk_gap'] = NAN
-  # the car's wheels against the TSK's own target (TSK -> engine / DSG), same lag
-  ut = hold(np, *D.c['tsk_target'], El - CAR_LAG, stale=0.2)
-  okt = np.isfinite(ut) & np.isfinite(y)
-  pk['car_tsk'] = float(np.mean(y[okt]) / np.mean(ut[okt])) if okt.sum() > 25 and np.mean(ut[okt]) > 0.3 else NAN
   # TSK_06 TSK_Status: 3 = regulating; 5 = brake only (no engine torque); 4 = driver's pedal
   stat = hold(np, *D.c['tsk_status'], E, stale=0.5)
   sv = stat[np.isfinite(stat)].astype(int)
@@ -1001,7 +1197,13 @@ def analyse(D, pk, prof, pmax):
   with np.errstate(invalid='ignore'):
     pk['eng_short'] = nmed(er - ea)
   pk['grade'] = nmed(hold(np, *D.c['grade'], E, stale=2.0))
+  pk['mass'] = nmed(hold(np, *D.c['mass'], E, stale=5.0))
+  pk['tsk_band'] = nmed(hold(np, *D.c['tsk_band'], E, stale=0.5))
   pk['dyn'] = nmax(hold(np, *D.c['dyn'], E, stale=0.2))
+  # ACC_06 fields over the pickup, 10 per second: openpilot's and the factory radar's (pooled in acc06_summary)
+  E10 = E[::5]
+  pk['acc_op'] = {k: hold(np, *x, E10, stale=0.2).astype(np.float32) for k, x in D.acc_op.items()}
+  pk['acc_stock'] = {k: hold(np, *x, E10, stale=0.2).astype(np.float32) for k, x in D.acc_stock.items()}
   # 5 -> 20 mph, which every pickup to a set speed of 25 mph or more passes
   mc = (D.cs_t >= t_a) & (D.cs_t <= t_b)
   hit = np.where(D.v[mc] >= V_20)[0]
@@ -1097,18 +1299,32 @@ def top_codes(counts, n=3, sep=' '):
 
 
 def lead_txt(pk):
-  """'no lead', or 'lead N%' with N = share of the time the gap was at or under the MPC's wanted gap."""
-  if not pk['lead']:
-    return 'no lead'
-  return 'lead' + (f" {pk['close'] * 100:.0f}%" if pk['close'] == pk['close'] else '')
+  """The car-ahead column. Behind a car: 'close N%' (N = share of the time at or under the MPC's wanted gap), else
+  'held N%' (share of the time it held the plan back, LEAD) or 'src N%' (the MPC's lead source). No car close
+  ahead: 'far N m' = one seen farther (median gap), 'none' = no car seen within 60 m."""
+  if pk['lead']:
+    if pk['close'] >= CLOSE_SHARE:
+      return f"close {pk['close'] * 100:.0f}%"
+    return f"held {pk['held'] * 100:.0f}%" if pk['held'] >= HELD_SHARE else f"src {pk['src_lead'] * 100:.0f}%"
+  return f"far {pk['gap']:.0f} m" if pk['far'] else 'none'
+
+
+def lead_tok(pk):
+  """The same for a P line: L/N, f = far car's median gap m, c = % at or under the wanted gap, h = % LEAD,
+  s = % the MPC's lead source: Lc76h81s79, Nf45, Nf31c18h26s20, N-."""
+  txt = 'L' if pk['lead'] else 'N' + (f"f{pk['gap']:.0f}" if pk['far'] else '')
+  for k, key in (('c', 'close'), ('h', 'held'), ('s', 'src_lead')):
+    if pk['lead'] or pk[key] >= 0.005:
+      txt += f"{k}{pct(pk[key], 1)}"
+  return txt if len(txt) > 1 else 'N-'
 
 
 def set_txt(pk):
-  """Set speed at the start in mph; * = 40 km/h (SET pressed under 25 mph); >N = changed to N during the pickup."""
+  """Set speed at the start in mph; * = the engage minimum (SET at a stop / under it); >N = changed to N during."""
   s0, s1 = pk['set0_mph'], pk['set1_mph']
   if s0 != s0:
     return '-'
-  txt = f'{s0:.0f}' + ('*' if pk['set40'] else '')
+  txt = f'{s0:.0f}' + ('*' if pk['setmin'] else '')
   if s1 == s1 and abs(s1 - s0) >= 1.0:
     txt += f'>{s1:.0f}'
   return txt
@@ -1137,18 +1353,21 @@ def eng_txt(req, got):
   return f'{fmt(req, 0, 3)}/{fmt(got, 0, 3)}'
 
 
-def print_pickups(picks):
+def print_pickups(picks, min_txt):
   say('PICKUPS (accels in m/s2: plan = openpilot\'s planned accel, longitudinalPlan.aTarget; MPC = what it wanted before')
   say('  the cap; sent = ACC_06 that went out; TSK = cruise computer\'s own target (Motor_20); wheels = slope of the wheel')
-  say('  speeds; car% = wheels / sent; set = set speed at the start in mph, * = 40 km/h = SET pressed under 25 mph,')
-  say('  >N = changed during the pickup; lead N% = a car ahead, at or under the MPC\'s wanted gap N% of the time;')
-  say('  5-20 = s from 5 to 20 mph; thr = time allowThrottle was off; TSK st = TSK_Status')
-  say('  most of the time (3 = regulating, 5 = brake only); eng = engine torque asked/got Nm; gear = lever + DSG target')
-  say('  gear; limits = share of planner frames held back by each limiter)')
-  say('   #  drive     at  lead       set  result                    5-20  plan med/max   MPC  sent  TSK  wheels med/max'
+  say('  speeds; car% = wheels / sent in steady state (request steady 0.5 s, wheels 0.5 s later; - = never steady);')
+  say(f'  set = set speed at the start in mph, * = the engage minimum (SET at a stop / under it; {min_txt}),')
+  say('  >N = changed during the pickup; car ahead: close N% = behind a car, at or under the MPC\'s wanted gap N% of the')
+  say('  time; held N% / src N% = behind a car that held the plan back (LEAD) / that the MPC followed N% of the time;')
+  say('  far N m = no car close ahead, one seen farther (median gap); none = no car seen within 60 m;')
+  say('  5-20 = s from 5 to 20 mph; thr = time allowThrottle was off;')
+  say('  TSK st = TSK_Status most of the time (3 = regulating, 5 = brake only); eng = engine torque asked/got Nm;')
+  say('  gear = lever + DSG target gear; limits = share of planner frames held back by each limiter)')
+  say('   #  drive     at  car ahead     set  result                    5-20  plan med/max   MPC  sent  TSK  wheels med/max'
       '  aEgo car%  thr  TSK st  eng Nm    gear  limits')
   for i, pk in enumerate(picks, 1):
-    say(f"  {i:2d} {pk['rid']:>5} {pk['clock']:>6}  {lead_txt(pk):<9} {set_txt(pk):>5}  {result_txt(pk):<24}"
+    say(f"  {i:2d} {pk['rid']:>5} {pk['clock']:>6}   {lead_txt(pk):<10} {set_txt(pk):>5}  {result_txt(pk):<24}"
         f" {fmt(pk['t520'], 1, 5)}  {fmt(pk['plan_med'], 2, 5)}/{fmt(pk['plan_max'], 2, 4)}  {fmt(pk['mpc_max'], 2, 4)}"
         f" {fmt(pk['sent_max'], 2, 5)} {fmt(pk['tsk_max'], 1, 4)}  {fmt(pk['whl_med'], 2, 5)}/{fmt(pk['whl_max'], 2, 4)}"
         f"   {fmt(pk['aego_med'], 2, 4)} {pcts(pk['car'])} {pcts(pk['thr_off'])}  {tsk_txt(pk):<7} {eng_txt(pk['eng_req'], pk['eng_got']):>7}"
@@ -1178,6 +1397,12 @@ def group_stats(G):
     'tsk_max': med([pk['tsk_max'] for pk in G]), 'whl_med': med([pk['whl_med'] for pk in G]),
     'whl_max': med([pk['whl_max'] for pk in G]), 'aego_med': med([pk['aego_med'] for pk in G]),
     'car': med([pk['car'] for pk in G]), 'car_short': med([pk['car_short'] for pk in G]),
+    'car_all': med([pk['car_all'] for pk in G]), 'n_steady': sum(1 for pk in G if pk['car'] == pk['car']),
+    'mass': med([pk['mass'] for pk in G]), 'tsk_band': med([pk['tsk_band'] for pk in G]),
+    'grade': med([pk['grade'] for pk in G]),
+    'n_far': sum(1 for pk in G if pk['far']), 'far_gap': med([pk['gap'] for pk in G if pk['far']]),
+    'far_close': max([pk['close'] for pk in G if pk['far']], default=0.0),
+    'far_held': max([max(pk['held'], pk['src_lead']) for pk in G if pk['far']], default=0.0),
     'car_tsk': med([pk['car_tsk'] for pk in G]), 'tsk_gap': med([pk['tsk_gap'] for pk in G]),
     'tsk_not3': wmean(G, 'tsk_not3'), 'tsk5': wmean(G, 'tsk5'), 'thr_off': wmean(G, 'thr_off'),
     'rpm': med([pk['rpm_med'] for pk in G]), 'eng_req': med([pk['eng_req'] for pk in G]),
@@ -1185,8 +1410,7 @@ def group_stats(G):
     'close': med([pk['close'] for pk in G]),
     'counts': counts, 'secs': float(counts.sum()) * DT_PLAN, 'cap_med': med([pk['cap_med'] for pk in G]),
     'set0': med([pk['set0_mph'] for pk in G]),
-    'set40': sum(1 for pk in G if pk['set40']),
-    'low_set': sum(1 for pk in G if pk['set0_mph'] == pk['set0_mph'] and pk['set0_mph'] <= 26.0),
+    'setmin': sum(1 for pk in G if pk['setmin']),
     'taken': sum(1 for pk in G if pk['why'] in ('GAS', 'BRAKE', 'OP off')),
     'S': levs.count('S'), 'D': levs.count('D'), 'gear_lo': min(lo) if lo else -1, 'gear_hi': max(hi) if hi else -1,
     'lever': max(set(levs), key=levs.count) if levs else '?',
@@ -1203,37 +1427,100 @@ def group_stats(G):
   }
 
 
+def acc06_summary(picks, radar_bus):
+  """The factory radar's own ACC_06 next to openpilot's, pooled over all pickups (openpilot driving): one line for
+  the report and one for the paste block."""
+  def pool(side):
+    n = [len(pk[side]['st']) if 'st' in pk[side] else 0 for pk in picks]
+    return {key: np.concatenate([pk[side][key] if key in pk[side] else np.full(k, NAN) for pk, k in zip(picks, n, strict=True)])
+            if sum(n) else np.zeros(0) for key, _ in ACC_CMP}
+
+  def fin(a):
+    return a[np.isfinite(a)]
+
+  def mode(a):
+    a = fin(a)
+    return int(np.bincount(np.round(a).astype(int)).argmax()) if len(a) else -1
+
+  def on(a):
+    a = fin(a)
+    return float(np.mean(a > 0.5)) if len(a) else NAN
+
+  def common(d):
+    return (f"band unten/oben {fmt(nmed(d['lo']), 2, 1)}/{fmt(nmed(d['hi']), 2, 1)}, ramps +{fmt(nmed(d['pos']), 2, 1)}"
+            f"/-{fmt(nmed(d['neg']), 2, 1)}, DynErhoehung {pcts(on(d['dyn']), 1)}, limitierte_Anfahrdyn {pcts(on(d['lim']), 1)}")
+
+  op, sk = pool('acc_op'), pool('acc_stock')
+  if len(fin(op['typ'])):
+    op_h = f"Typ {mode(op['typ'])}, " + common(op)
+    op_t = (f"typ={mode(op['typ'])} band={fmt(nmed(op['lo']), 2, 1)}/{fmt(nmed(op['hi']), 2, 1)}"
+            f" ramp={fmt(nmed(op['pos']), 2, 1)}/{fmt(nmed(op['neg']), 2, 1)} dyn={fmt(on(op['dyn']), 2, 1)}"
+            f" lim={fmt(on(op['lim']), 2, 1)}")
+  else:
+    op_h, op_t = 'nothing (ACC_06 not found)', 'none'
+  st_ = fin(sk['st']).astype(int) if len(sk['st']) else np.zeros(0, dtype=int)
+  if not len(st_):
+    return {'line': "ACC_06 in the pickups: the factory radar's own ACC_06 is not in the logs (no bus-2 frames);"
+                    f" we send {op_h}", 'paste': f"RADAR none | OP {op_t}"}
+  cnt = np.bincount(st_, minlength=8)
+  top = [i for i in np.argsort(-cnt, kind='stable')[:2] if cnt[i] * 20 >= len(st_)]
+  h = ('status ' + ', '.join(f"{ACC_ST.get(int(i), i)}({i}) {cnt[i] * 100.0 / len(st_):.0f}%" for i in top)
+       + f", Typ {mode(sk['typ'])}, " + common(sk))
+  t = (f"st={','.join(f'{i}:{cnt[i] * 100.0 / len(st_):.0f}' for i in top)} typ={mode(sk['typ'])}"
+       f" band={fmt(nmed(sk['lo']), 2, 1)}/{fmt(nmed(sk['hi']), 2, 1)} ramp={fmt(nmed(sk['pos']), 2, 1)}"
+       f"/{fmt(nmed(sk['neg']), 2, 1)} dyn={fmt(on(sk['dyn']), 2, 1)} lim={fmt(on(sk['lim']), 2, 1)}")
+  with np.errstate(invalid='ignore'):
+    a3 = sk['acc'][np.round(sk['st']) == 3]
+  if len(fin(a3)) >= 5:     # the radar's own request while its ACC is active (0.5 s or more at 10 per second)
+    h += f", its own accel while active {fmt(nmed(a3), 2, 1)}/{fmt(nmax(a3), 2, 1)} med/max"
+    t += f" acc3={fmt(nmed(a3), 2, 1)}/{fmt(nmax(a3), 2, 1)}"
+  return {'line': f"ACC_06 in the pickups: factory radar ({radar_bus}) sends {h}; we send {op_h}",
+          'paste': f"RADAR {t} | OP {op_t}"}
+
+
 def share(g, *codes):
   tot = g['counts'].sum()
   return float(sum(g['counts'][C[c]] for c in codes)) / tot if tot else 0.0
 
 
-def print_medians(groups):
-  say('MEDIANS per group, plan side (5-25 / 5-20 = s for the pickups that got there; "if as planned" = 5-20 if the car')
-  say('  had done exactly the planned accel; "at cap" = 5-20 for a perfect car at the cap the whole way; SET* = pickups')
-  say('  that started at 40 km/h, i.e. SET pressed under 25 mph; thr off = share of time allowThrottle was off)')
-  say('  group        n  to25  5-25  5-20  if as planned  at cap   set SET*  plan med/max   MPC  thr off  taken over')
+GROUP_LABEL = {'no lead': 'no car close', 'lead': 'behind a car', 'all': 'all'}
+
+
+def print_medians(groups, min_txt, radar):
+  say('MEDIANS per group, plan side (no car close = no car ahead, or one that seldom mattered; 5-25 / 5-20 = s for the')
+  say('  pickups that got there; "if as planned" = 5-20 if the car had done exactly the planned accel; "at cap" = 5-20')
+  say(f'  for a perfect car at the cap the whole way; SET* = pickups that started at the engage minimum ({min_txt}),')
+  say('  i.e. SET pressed at a stop / under it; thr off = share of time allowThrottle was off)')
+  say('  group          n  to25  5-25  5-20  if as planned  at cap   set SET*  plan med/max   MPC  thr off  taken over')
   for name, g in groups:
     if not g['n']:
       continue
-    say(f"  {name:<10} {g['n']:3d}  {g['reached']:4d} {fmt(g['t525'], 1, 5)} {fmt(g['t520'], 1, 5)}  {fmt(g['plan520'], 1, 13)}"
-        f"  {fmt(g['ideal20'], 1, 6)}  {fmt(g['set0'], 0, 4)} {g['set40']:4d}  {fmt(g['plan_med'], 2, 5)}/{fmt(g['plan_max'], 2, 4)}"
-        f"  {fmt(g['mpc_max'], 2, 4)}  {pcts(g['thr_off'], 6)}  {g['taken']:10d}")
-  say('MEDIANS per group, car side (TSK-sent = how far the TSK\'s own target sat under the steady request; car/TSK =')
-  say('  wheels / TSK target; TSK5 = share of time TSK_Status was 5, brake only = no engine torque)')
-  say('  group       sent   TSK  TSK-sent  TSK5  eng asked/got Nm   rpm   gear  wheels med/max  aEgo  car%  car/TSK')
+    say(f"  {GROUP_LABEL[name]:<12} {g['n']:3d}  {g['reached']:4d} {fmt(g['t525'], 1, 5)} {fmt(g['t520'], 1, 5)}"
+        f"  {fmt(g['plan520'], 1, 13)}  {fmt(g['ideal20'], 1, 6)}  {fmt(g['set0'], 0, 4)} {g['setmin']:4d}"
+        f"  {fmt(g['plan_med'], 2, 5)}/{fmt(g['plan_max'], 2, 4)}  {fmt(g['mpc_max'], 2, 4)}  {pcts(g['thr_off'], 6)}"
+        f"  {g['taken']:10d}")
+  say('MEDIANS per group, car side (TSK-sent = how far the TSK\'s own target sat under the steady request; TSK5 = share')
+  say('  of time TSK_Status was 5, brake only = no engine torque; car% = wheels / sent in steady state, request within')
+  say('  0.1 m/s2 for 0.5 s and the 0.5 s after it, wheels taken at the end (n = pickups with such a stretch);')
+  say('  car/TSK = the same against the TSK\'s own target; band = TSK_06 TSK_zul_Regelabw m/s2; mass = Motor_16')
+  say('  TSK_Fahrzeugmasse_02 kg; grade = Motor_16 TSK_Steigung %)')
+  say('  group         sent   TSK  TSK-sent  TSK5  eng asked/got Nm   rpm   gear  wheels med/max  aEgo  car% (n)'
+      '  car/TSK  band  mass  grade')
   for name, g in groups:
     if not g['n']:
       continue
-    say(f"  {name:<10} {fmt(g['sent_max'], 2, 5)} {fmt(g['tsk_max'], 1, 5)}  {fmt(g['tsk_gap'], 2, 7, plus=True)}  {pcts(g['tsk5'], 3)}"
-        f"  {eng_txt(g['eng_req'], g['eng_got']):>16}  {fmt(g['rpm'], 0, 5)}  {gear_txt(g['lever'], g['gear_lo'], g['gear_hi']):>5}"
-        f"  {fmt(g['whl_med'], 2, 6)}/{fmt(g['whl_max'], 2, 4)}   {fmt(g['aego_med'], 2, 4)}  {pcts(g['car'])}     {pcts(g['car_tsk'])}")
+    say(f"  {GROUP_LABEL[name]:<12} {fmt(g['sent_max'], 2, 5)} {fmt(g['tsk_max'], 1, 5)}  {fmt(g['tsk_gap'], 2, 7, plus=True)}"
+        f"  {pcts(g['tsk5'], 3)}  {eng_txt(g['eng_req'], g['eng_got']):>16}  {fmt(g['rpm'], 0, 5)}"
+        f"  {gear_txt(g['lever'], g['gear_lo'], g['gear_hi']):>5}  {fmt(g['whl_med'], 2, 6)}/{fmt(g['whl_max'], 2, 4)}"
+        f"   {fmt(g['aego_med'], 2, 4)}  {pcts(g['car'])} ({g['n_steady']:2d})     {pcts(g['car_tsk'])}"
+        f"  {fmt(g['tsk_band'], 2, 4)}  {fmt(g['mass'], 0, 4)}  {fmt(g['grade'], 1, 5)}")
+  say('  ' + radar['line'])
   say()
   say('LIMITS, share of all pickup time (planner frames) per group:')
   for name, g in groups:
     if not g['n']:
       continue
-    say(f"  {name:<10} {g['secs']:6.1f} s: {top_codes(g['counts'], n=len(CODES))}")
+    say(f"  {GROUP_LABEL[name]:<12} {g['secs']:6.1f} s: {top_codes(g['counts'], n=len(CODES))}")
 
 
 def car_verdict(g):
@@ -1266,7 +1553,7 @@ def car_verdict(g):
   return out
 
 
-def bottom_line(groups, cap_txt, pmax_txt, room_txt):
+def bottom_line(groups, cap_txt, pmax_txt, room_txt, mins):
   out = []
   g = dict(groups).get('no lead')
   if g and g['n']:
@@ -1278,12 +1565,19 @@ def bottom_line(groups, cap_txt, pmax_txt, room_txt):
       if CODES[i] == 'CAP':
         txt += f' ({cap_txt}, {pmax_txt})'
       parts.append(f"{g['counts'][i] * 100.0 / tot:.0f}% {txt}")
-    out.append(f"With no car ahead ({g['n']} pickup{'s' if g['n'] != 1 else ''}, {g['secs']:.0f} s), the limit on the planned accel was: "
-               + '; '.join(parts) + '.')
+    # "never got close" only when it never was at or under the wanted gap and never held the plan back: a pickup with
+    # a car close up to 20% / LEAD or the lead source up to a third of the time is still in this group
+    seldom = ('never got close' if g['far_close'] < 0.005 and g['far_held'] < 0.005 else
+              f"was at or under the wanted gap at most {g['far_close'] * 100:.0f}% of a pickup"
+              f" and held it back / was followed at most {g['far_held'] * 100:.0f}%")
+    far = (f"; a car was seen farther ahead on {g['n_far']} of them (median gap {g['far_gap']:.0f} m) but {seldom}"
+           if g['n_far'] else '')
+    out.append(f"With no car close ahead ({g['n']} pickup{'s' if g['n'] != 1 else ''}, {g['secs']:.0f} s{far}), the limit on"
+               " the planned accel was: " + '; '.join(parts) + '.')
     out.append(f"  Plan side: openpilot planned {fmt(g['plan_med'], 2, 1)} median / {fmt(g['plan_max'], 2, 1)} max m/s2 (the MPC"
                f" wanted up to {fmt(g['mpc_max'], 2, 1)}); set speed at the start {fmt(g['set0'], 0, 1)} mph median,"
-               f" {g['set40']} of {g['n']} started at 40 km/h (SET pressed under 25 mph); the throttle gate was off"
-               f" {pcts(g['thr_off'], 1)} of the time.")
+               f" {g['setmin']} of {g['n']} started at the engage minimum ({mins['txt']}, SET pressed at a stop / under it);"
+               f" the throttle gate was off {pcts(g['thr_off'], 1)} of the time.")
     cs_ = [f"openpilot sent up to {fmt(g['sent_max'], 2, 1)}"]
     if g['tsk_gap'] == g['tsk_gap']:
       cs_.append(f"the TSK's own target sat {fmt(g['tsk_gap'], 2, 1)} under it while steady")
@@ -1291,7 +1585,9 @@ def bottom_line(groups, cap_txt, pmax_txt, room_txt):
       cs_.append(f"TSK_Status 5 (brake only) {pcts(g['tsk5'], 1)} of the time")
     if g['eng_req'] == g['eng_req']:
       cs_.append(f"engine torque asked/got {eng_txt(g['eng_req'], g['eng_got']).replace(' ', '')} Nm")
-    cs_.append(f"the wheels gave {fmt(g['whl_med'], 2, 1)} median = {pcts(g['car'], 1)} of what was sent")
+    cs_.append(f"the wheels gave {fmt(g['whl_med'], 2, 1)} median; in steady state {pcts(g['car'], 1)} of what was sent"
+               f" (median of {g['n_steady']} pickup{'s' if g['n_steady'] != 1 else ''} with a steady request;"
+               f" {pcts(g['car_all'], 1)} over the whole pickup, lag included)")
     out.append('  Car side: ' + '; '.join(cs_) + '.')
     if g['n20']:
       txt = f"  5->20 mph took {g['t520']:.1f} s (median of {g['n20']})"
@@ -1314,10 +1610,10 @@ def bottom_line(groups, cap_txt, pmax_txt, room_txt):
       else:
         verdict.append('the planner cap holds the plan')
     verdict += car_verdict(g)
-    if share(g, 'SET') >= 0.2 or g['set40'] >= max(1, (g['n'] + 2) // 3):
-      verdict.append(f"the set speed was close: {g['set40']} of {g['n']} pickups started at 40 km/h (24.9 mph, SET pressed"
-                     f" under 25 mph) and the MPC eases off from ~14 mph then ({share(g, 'SET') * 100:.0f}% of the time);"
-                     ' a higher set speed or RES lets it keep pulling')
+    if share(g, 'SET') >= 0.2 or (g['setmin'] >= max(1, (g['n'] + 2) // 3) and share(g, 'SET') >= 0.05):
+      verdict.append(f"the set speed was close {share(g, 'SET') * 100:.0f}% of the time: {g['setmin']} of {g['n']} pickups"
+                     f" started at the engage minimum ({mins['txt']}, SET pressed at a stop / under it) and the MPC eases"
+                     f" off from about {mins['ease']} then; a higher set speed or RES lets it keep pulling")
     if share(g, 'THR') >= 0.1:
       verdict.append(f"the model's gas prediction cut the throttle {share(g, 'THR') * 100:.0f}% of the time"
                      ' (allowThrottle; the cap then needs ~2 s to come back)')
@@ -1332,13 +1628,13 @@ def bottom_line(groups, cap_txt, pmax_txt, room_txt):
     if verdict:
       out.append('  So: ' + '; '.join(verdict) + '.')
   else:
-    out.append('No pickup without a car ahead in these drives.')
+    out.append('No pickup with no car close ahead in these drives (every one was behind a car that mattered).')
   g = dict(groups).get('lead')
   if g and g['n']:
     cv = car_verdict(g)
     out.append(f"Behind a car ({g['n']} pickup{'s' if g['n'] != 1 else ''}): {share(g, 'LEAD') * 100:.0f}% of the time the car ahead held it back"
                f" (at or under the MPC's wanted gap {pcts(g['close'], 1)} of the time), the cap {share(g, 'CAP') * 100:.0f}%;"
-               f" plan {fmt(g['plan_med'], 2, 1)}/{fmt(g['plan_max'], 2, 1)}; car {pcts(g['car'], 1)} of what was sent"
+               f" plan {fmt(g['plan_med'], 2, 1)}/{fmt(g['plan_max'], 2, 1)}; car {pcts(g['car'], 1)} of what was sent (steady)"
                + ('; ' + '; '.join(cv) if cv else '') + '.')
   return out
 
@@ -1346,8 +1642,16 @@ def bottom_line(groups, cap_txt, pmax_txt, room_txt):
 def print_detail(i, pk):
   d = pk['det']
   say()
-  say(f"==== PICKUP {i} (drive {pk['rid']} at {pk['clock']}): {lead_txt(pk)}"
-      + (f" (gap {pk['gap']:.0f} m median)" if pk['lead'] and pk['gap'] == pk['gap'] else '') + f", set {set_txt(pk)} mph"
+  if pk['lead']:
+    ahead = (f"behind a car (at or under the wanted gap {pk['close'] * 100:.0f}% of the time, held it back"
+             f" {pk['held'] * 100:.0f}%" + (f", gap {pk['gap']:.0f} m median)" if pk['gap'] == pk['gap'] else ')'))
+  else:
+    ahead = 'no car close ahead' + (f" (a car {pk['gap']:.0f} m ahead, median" if pk['far'] else '')
+    if pk['close'] >= 0.005 or pk['held'] >= 0.005:
+      ahead += (', ' if pk['far'] else ' (') + (f"at or under the wanted gap {pk['close'] * 100:.0f}%,"
+                                                f" held it back {pk['held'] * 100:.0f}%")
+    ahead += ')' if pk['far'] or pk['close'] >= 0.005 or pk['held'] >= 0.005 else ''
+  say(f"==== PICKUP {i} (drive {pk['rid']} at {pk['clock']}): {ahead}, set {set_txt(pk)} mph"
       + (f" (openpilot switched on {pk['eng_ago']:.0f} s before)" if pk['eng_ago'] == pk['eng_ago'] else '')
       + f", {result_txt(pk)}; {CAP_NAMES[pk['prof']]}" + (f" {pk['pmax']:.2f}" if pk['prof'] == 'pickup' else '')
       + (f"; grade {pk['grade']:.0f}%" if pk['grade'] == pk['grade'] else ''))
@@ -1380,13 +1684,14 @@ def spread(idx, k):
 
 
 def paste_pick(picks, room):
-  """The pickups that get a P line, in time order: all if they fit, else the no-lead ones first, spread from the
-  slowest to the fastest (so every part of the range and not only the oldest drive shows), then lead ones."""
+  """The pickups that get a P line, in time order: all if they fit, else the first and the last one (so the lines
+  span the drives), then the no-lead ones, spread from the slowest to the fastest, then lead ones."""
   if len(picks) <= room:
     return list(range(len(picks)))
-  nl = sorted((i for i in range(len(picks)) if not picks[i]['lead']), key=lambda i: pace(picks[i]))
-  ld = sorted((i for i in range(len(picks)) if picks[i]['lead']), key=lambda i: pace(picks[i]))
-  out = spread(nl, room)
+  ends = [0, len(picks) - 1]
+  nl = sorted((i for i in range(1, len(picks) - 1) if not picks[i]['lead']), key=lambda i: pace(picks[i]))
+  ld = sorted((i for i in range(1, len(picks) - 1) if picks[i]['lead']), key=lambda i: pace(picks[i]))
+  out = ends + spread(nl, room - 2)
   out += spread(ld, room - len(out))
   return sorted(out)
 
@@ -1403,14 +1708,17 @@ def all_notes(R):
   return notes, missing
 
 
-def paste_block(R, picks, groups, cap_info, notes=(), missing=()):
+def paste_block(R, picks, groups, cap_info, notes=(), missing=(), setmin_info='?', radar=None):
   say()
   say('===== PASTE THIS TO CLAUDE (start) =====')
   lines = [f"mk7_pickup_check v{TOOL_VERSION.split()[0]} drives={','.join(r['rid'] for r in R)} pickups={len(picks)}"
-           f" pickup_file_now={cap_info}"]
+           f" pickup_file_now={cap_info} set_min_file_now={setmin_info} (lead = behind a car: close>={CLOSE_SHARE * 100:.0f}%"
+           f" or LEAD/src>={HELD_SHARE * 100:.0f}%; nolead = no car close ahead;"
+           " P: L/N f=far car gap m c=close% h=LEAD% s=lead src%; car = steady)"]
   for r in R:
     lines.append(f"D {r['rid']} {r['branch']}@{r['commit']} segs={r['segs']}/{r['nseg']} picks={r['n']} cap={r['prof']}"
                  + (f"{r['pmax']:.2f}" if r['prof'] == 'pickup' else '') + f"({r['how']}/n{r['n_clip']})"
+                 + f" setmin={r['set_min']:.0f}({r['set_min_how']}{'/n' + str(r['set_min_n']) if r['set_min_n'] else ''})"
                  + f" pers={r['pers']} exp={pcts(r['exp'], 1)} skip={r['skip']}" + (f" mism={r['mism']}" if r['mism'] else '')
                  + (' ' + r['src'] if r is R[0] or r['src'] != R[0]['src'] else ''))
   for name, g in groups:
@@ -1421,7 +1729,7 @@ def paste_block(R, picks, groups, cap_info, notes=(), missing=()):
                  f" t520={fmt(g['t520'], 1, 1)}/n{g['n20']} plan520={fmt(g['plan520'], 1, 1)} ideal20={fmt(g['ideal20'], 1, 1)}"
                  f" cost=plan{fmt(g['plan_cost'], 1, 1, plus=True)}(max{fmt(g['plan_cost_max'], 1, 1, plus=True)})"
                  f"/car{fmt(g['car_cost'], 1, 1, plus=True)}(max{fmt(g['car_cost_max'], 1, 1, plus=True)})"
-                 f" set0={fmt(g['set0'], 0, 1)} set40={g['set40']} plan={fmt(g['plan_med'], 2, 1)}/{fmt(g['plan_max'], 2, 1)}"
+                 f" set0={fmt(g['set0'], 0, 1)} setmin={g['setmin']} plan={fmt(g['plan_med'], 2, 1)}/{fmt(g['plan_max'], 2, 1)}"
                  f" mpc={fmt(g['mpc_max'], 2, 1)} throff={fmt(g['thr_off'], 2, 1)} close={fmt(g['close'], 2, 1)}"
                  f" taken={g['taken']}")
     lines.append(f"CAR {key} sent={fmt(g['sent_max'], 2, 1)} tsk={fmt(g['tsk_max'], 1, 1)} tskgap={fmt(g['tsk_gap'], 2, 1)}"
@@ -1429,10 +1737,14 @@ def paste_block(R, picks, groups, cap_info, notes=(), missing=()):
                  f" eng={eng_txt(g['eng_req'], g['eng_got']).replace(' ', '')} engshort={fmt(g['eng_short'], 0, 1)}"
                  f" rpm={fmt(g['rpm'], 0, 1)} gear={gear_txt(g['lever'], g['gear_lo'], g['gear_hi'])} D/S={g['D']}/{g['S']}"
                  f" whl={fmt(g['whl_med'], 2, 1)}/{fmt(g['whl_max'], 2, 1)} aego={fmt(g['aego_med'], 2, 1)}"
-                 f" car={fmt(g['car'], 2, 1)} cartsk={fmt(g['car_tsk'], 2, 1)} short={fmt(g['car_short'], 2, 1)}"
+                 f" car={fmt(g['car'], 2, 1)}/n{g['n_steady']} carall={fmt(g['car_all'], 2, 1)} cartsk={fmt(g['car_tsk'], 2, 1)}"
+                 f" short={fmt(g['car_short'], 2, 1)} band={fmt(g['tsk_band'], 2, 1)} mass={fmt(g['mass'], 0, 1)}"
+                 f" grade={fmt(g['grade'], 1, 1)}"
                  f" npk=car:{g['n_carlow']},tsk:{g['n_tskgap']},eng:{g['n_engshort']},st5:{g['n_tsk5']}")
     lines.append(f"LIM {key} secs={g['secs']:.0f} " + ' '.join(f"{CODES[i]}={g['counts'][i] * 100.0 / max(g['counts'].sum(), 1):.0f}"
                                                             for i in range(len(CODES)) if g['counts'][i]))
+  if radar is not None:
+    lines.append(radar['paste'])
   # notes: the important ones first (at most 3), the car messages that are not on the bus in one line
   nl = [n for _, n in notes][:3]
   if len(notes) > 3:
@@ -1443,8 +1755,7 @@ def paste_block(R, picks, groups, cap_info, notes=(), missing=()):
   order = paste_pick(picks, room)
   for i in order:
     pk = picks[i]
-    lines.append(f"P{i + 1} {pk['rid']} {pk['clock']} {'L' if pk['lead'] else 'N'}{pct(pk['lead_share'], 1)}"
-                 + (f"c{pct(pk['close'], 1)}" if pk['lead'] else '')
+    lines.append(f"P{i + 1} {pk['rid']} {pk['clock']} {lead_tok(pk)}"
                  + f" set={set_txt(pk)} end={pk['why'].replace(' ', '')}@{pk['v_end'] * MPH:.0f}/{pk['dur']:.1f}s"
                  f" t520={fmt(pk['t520'], 1, 1)}/{fmt(pk['plan520'], 1, 1)}"
                  f" plan={fmt(pk['plan_med'], 2, 1)}/{fmt(pk['plan_max'], 2, 1)} mpc={fmt(pk['mpc_max'], 2, 1)}"
@@ -1455,8 +1766,8 @@ def paste_block(R, picks, groups, cap_info, notes=(), missing=()):
                  f" {gear_txt(pk['lever'], pk['gear_lo'], pk['gear_hi'])} g={fmt(pk['grade'], 0, 1)} "
                  + top_codes(pk['codes'], n=4, sep=',').replace(' ', '').replace('%', ''))
   if len(picks) > len(order):
-    lines.append(f'... {len(picks) - len(order)} more pickups not shown (lead ones left out first; the ones shown span'
-                 ' the slowest to the fastest)')
+    lines.append(f'... {len(picks) - len(order)} more pickups not shown (the first and last are always shown; lead ones'
+                 ' left out first; the others span the slowest to the fastest)')
   lines += ['note: ' + n for n in nl]
   for ln in lines:
     say(ln)
@@ -1476,8 +1787,37 @@ def pickup_file_now():
   return val, f'{val:.2f}'
 
 
+def set_min_file_now():
+  """/data/set_min_mph as t2_set_min reads it (clamped to 25-45 mph); None = no file / unreadable (= 40 mph there)."""
+  try:
+    with open(SET_MIN_FILE) as f:
+      val = float(f.read().strip())
+  except OSError:
+    return None, 'nofile'
+  except ValueError:
+    return None, 'bad(=40mph)'
+  if not math.isfinite(val):
+    return None, 'bad(=40mph)'
+  clamped = min(max(val, SET_MIN_LIMITS[0]), SET_MIN_LIMITS[1])
+  return clamped, f'{clamped:g}' + ('' if clamped == val else f'(file {val:g})')
+
+
+def min_summary(R):
+  """The engage minimum(s) used, for the report's text: {'txt': '64 km/h = 40 mph (nofile+seen)', 'ease': '29 mph'}."""
+  ks = sorted({r['set_min'] for r in R})
+  parts = []
+  for k in ks:
+    rs = [r for r in R if r['set_min'] == k]
+    hows = ','.join(sorted({r['set_min_how'] for r in rs}))
+    parts.append(f"{k:.0f} km/h = {k / 3.6 * MPH:.0f} mph ({hows})"
+                 + (f" on {','.join(r['rid'] for r in rs)}" if len(ks) > 1 else ''))
+  txt = '; '.join(parts)
+  ease = [k / 3.6 * MPH - 11.0 for k in ks]
+  return {'txt': txt, 'ease': (f'{ease[0]:.0f} mph' if len(ease) == 1 else f'{ease[0]:.0f}-{ease[-1]:.0f} mph')}
+
+
 def main():
-  global np, PICKUP_FILE
+  global np, PICKUP_FILE, SET_MIN_FILE
   p = argparse.ArgumentParser(description='Read-only: what held the accel back on every pickup from 5 to 25 mph.')
   p.add_argument('drives', nargs='*', default=['0'], help='0 = newest (default), 1 = the one before, 0-4 = a range,'
                  ' or a route-name prefix; several are pooled')
@@ -1487,11 +1827,17 @@ def main():
                  ' logs, else the file now, else 1.8)')
   p.add_argument('--cap', choices=('auto', 'pickup', 'stock', 'cap17'), default='auto',
                  help='the planner cap the drives had (default: from the branch and the logs)')
+  p.add_argument('--set-min', type=float, help='the /data/set_min_mph value (mph) during these drives (default: seen'
+                 ' in the logs, else the file now, else 40 mph on t2_set_min)')
   p.add_argument('--car-on', action='store_true', help='run even though the car is on (not recommended)')
   p.add_argument('--log-root', default=ROOT, help=argparse.SUPPRESS)
   p.add_argument('--op-dir', default=OP_DIR, help=argparse.SUPPRESS)
   p.add_argument('--pickup-file', default=PICKUP_FILE, help=argparse.SUPPRESS)
+  p.add_argument('--set-min-file', default=SET_MIN_FILE, help=argparse.SUPPRESS)
   args = p.parse_args()
+  for name, val in (('--pickup', args.pickup), ('--set-min', args.set_min)):
+    if val is not None and not math.isfinite(val):
+      raise UsageError(f'{name} needs a number, e.g. {name} {"1.8" if name == "--pickup" else "40"}.')
   try:
     with open(ONROAD_PARAM, 'rb') as f:
       onroad = f.read().strip() in (b'1', b'\x01')
@@ -1499,7 +1845,7 @@ def main():
     onroad = False
   if onroad and not args.car_on:
     raise UsageError('The car is on. Switch the ignition off first (the comma stays on and you can still SSH in).')
-  PICKUP_FILE = args.pickup_file
+  PICKUP_FILE, SET_MIN_FILE = args.pickup_file, args.set_min_file
   rt = setup(args.op_dir)
   np = rt.np
   dbc, _ = load_dbc(rt, args.op_dir)
@@ -1515,6 +1861,7 @@ def main():
   pmax_file, file_txt = pickup_file_now()
   if args.pickup is not None:
     pmax_file, file_txt = min(max(args.pickup, 0.0), PICKUP_LIMIT), f'{args.pickup:.2f}(--pickup)'
+  smin_file, smin_txt = set_min_file_now()
   picks, R = [], []
   for route in chosen:
     t_start = time.time()
@@ -1545,6 +1892,8 @@ def main():
     lead_inputs(D, T_FOLLOW.get(pers_name, 1.25))
     set_inputs(D)
     classify(D)
+    D.engages = engages(D)
+    D.set_min, smin_how, smin_n = set_min_of(D, info['branch'], smin_file, args.set_min)
     found = find_pickups(D)
     pk_route = [analyse(D, pk, prof, pmax) for pk in found]
     ideal, ideal20 = ideal_time(np, prof, pmax), ideal_time(np, prof, pmax, V_20)
@@ -1566,10 +1915,13 @@ def main():
     R.append({'rid': rid(route), 'branch': info['branch'], 'commit': info['commit'], 'segs': info['segs'],
               'nseg': info['nseg'], 'n': len(pk_route), 'prof': prof, 'pmax': pmax, 'how': how, 'n_clip': n_clip,
               'pers': pers_name, 'exp': exp, 'skip': skip, 'mism': mism, 'notes': D.notes, 'missing': D.missing,
+              'set_min': D.set_min, 'set_min_how': smin_how, 'set_min_n': smin_n,
+              'radar_bus': D.srcs.get('ACC_06radar'),
               'src': 'src ' + ' '.join(f'{m}={s.replace(" ", "")}' for m, s in sorted(D.srcs.items()))})
     cap_txt = CAP_NAMES[prof] + (f' {pmax:.2f}' if prof == 'pickup' else '')
     say(head + f": {len(pk_route)} pickups" + (f' (left out: {skip_txt})' if skip_txt else '')
-        + f", {cap_txt} ({how}), personality {pers_name}, read in {time.time() - t_start:.0f} s")
+        + f", {cap_txt} ({how}), SET minimum {D.set_min:.0f} km/h ({smin_how}), personality {pers_name},"
+        f" read in {time.time() - t_start:.0f} s")
     del D
   if not R:
     raise UsageError('None of the chosen drives has rlogs with carState and longitudinalPlan.')
@@ -1584,17 +1936,21 @@ def main():
   for m, ds in missing:
     say(f"note: {m} is not in the logs of {'these drives' if len(ds) == len(R) else 'drive ' + ','.join(ds)}: {MISSING_TXT[m]}")
   say(f'/data/pickup_accel now: {file_txt} (only used when a drive never clipped clearly)')
+  say(f'/data/set_min_mph now: {smin_txt} (t2_set_min only; a drive\'s own SET-at-a-stop engages overrule it)')
   say()
   if not picks:
     say('No pickup from 5 mph with openpilot driving in these drives.')
-    paste_block(R, picks, [], file_txt, notes, missing)
+    paste_block(R, picks, [], file_txt, notes, missing, smin_txt)
     return 1
-  print_pickups(picks)
+  mins = min_summary(R)
+  buses = sorted({r['radar_bus'] for r in R if r['radar_bus']})
+  radar = acc06_summary(picks, ', '.join(buses) if buses else 'bus 2')
+  print_pickups(picks, mins['txt'])
   say()
   groups = [('no lead', group_stats([pk for pk in picks if not pk['lead']])),
             ('lead', group_stats([pk for pk in picks if pk['lead']])),
             ('all', group_stats(picks))]
-  print_medians(groups)
+  print_medians(groups, mins['txt'], radar)
   say()
   profs = {(r['prof'], round(r['pmax'], 2) if r['prof'] == 'pickup' else 0) for r in R}
   if len(profs) == 1:
@@ -1614,7 +1970,7 @@ def main():
   else:
     room_txt = f'the software room left is the cap itself (the drives had different caps: see the D lines; max {PICKUP_LIMIT})'
   say('BOTTOM LINE')
-  for ln in bottom_line(groups[:2], cap_txt, pmax_txt, room_txt):
+  for ln in bottom_line(groups[:2], cap_txt, pmax_txt, room_txt, mins):
     say(ln)
   if args.detail:
     if 1 <= args.detail <= len(picks):
@@ -1629,9 +1985,9 @@ def main():
     # the slowest one that openpilot drove to its end (not one the driver took over or that slowed down again)
     worst = min([pk for pk in nl if pk['why'] in ('25', 'set', 'limit', '25 s')] or nl, key=pace)
     say()
-    say('The slowest pickup with no car ahead in detail (another with --detail N, all with --all):')
+    say('The slowest pickup with no car close ahead in detail (another with --detail N, all with --all):')
     print_detail(next(i for i, pk in enumerate(picks, 1) if pk is worst), worst)
-  paste_block(R, picks, groups[:2], file_txt, notes, missing)
+  paste_block(R, picks, groups[:2], file_txt, notes, missing, smin_txt, radar)
   return 0
 
 
