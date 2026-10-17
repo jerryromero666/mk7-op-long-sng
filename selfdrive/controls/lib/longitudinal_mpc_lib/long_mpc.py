@@ -339,6 +339,8 @@ class LongitudinalMpc:
     self.time_integrator = 0.0
     self.x0 = np.zeros(X_DIM)
     self._last_dRel = [50.0, 50.0]          # per lead: [leadOne, leadTwo]
+    self._last_vLead = [0.0, 0.0]           # per lead: last real vLead (stop gap of a dropout phantom)
+    self._sg_v = [np.zeros(N+1), np.zeros(N+1)]  # per lead: speed(s) the stop gap is taken from
     self._lead_dropout_frames = [0, 0]
     self.set_weights()
 
@@ -385,6 +387,7 @@ class LongitudinalMpc:
     # Dropout state is per lead (idx 0 = leadOne, 1 = leadTwo). When it was shared, an absent
     # lead reused the other lead's distance and became a stopped phantom car at that spot.
     v_ego = self.x0[1]
+    phantom = False
     if lead is not None and lead.status:
       x_lead = lead.dRel
       last_dRel = self._last_dRel[idx]
@@ -398,10 +401,13 @@ class LongitudinalMpc:
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
+      if np.isfinite(v_lead):
+        self._last_vLead[idx] = max(float(v_lead), 0.0)
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
       self._lead_dropout_frames[idx] += 1
       if self._last_dRel[idx] < 25.0 and v_ego > 1.0 and self._lead_dropout_frames[idx] <= 10:
+        phantom = True
         x_lead = self._last_dRel[idx]
         v_lead = 0.0
         a_lead = 0.0
@@ -419,6 +425,9 @@ class LongitudinalMpc:
     v_lead = np.clip(v_lead, 0.0, 1e8)
     a_lead = np.clip(a_lead, -10., 5.)
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
+    # Stop gap: the phantom is a stopped car only as a stand-in for a lead that flickered out, so it gets
+    # the stop gap of that lead (full if it was stopped, none if it was moving), not the full stop gap.
+    self._sg_v[idx] = self._last_vLead[idx] if phantom else lead_xv[:, 1]
     return lead_xv
 
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
@@ -460,9 +469,9 @@ class LongitudinalMpc:
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = (lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift -
-                       stop_gap_shift(lead_xv_0[:,1], self._sg))
+                       stop_gap_shift(self._sg_v[0], self._sg))
     lead_1_obstacle = (lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift -
-                       stop_gap_shift(lead_xv_1[:,1], self._sg))
+                       stop_gap_shift(self._sg_v[1], self._sg))
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
