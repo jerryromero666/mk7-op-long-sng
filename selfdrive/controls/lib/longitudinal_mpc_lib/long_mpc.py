@@ -130,6 +130,36 @@ def close_follow_weight(lead, v_ego, t_follow, cut_full):
                np.clip((d_base - d_floor) / cut_full, 0.0, 1.0))
 
 
+# Standstill gap: stop farther back behind a stopped car without changing the following gap.
+# Where the lead is predicted to be (nearly) stopped along the MPC horizon (full at 0.5 m/s or
+# less, none at 1.5 m/s or more), its obstacle is moved back by the extra metres, so the MPC
+# plans the stop that much earlier and holds it there. A moving lead is untouched, so the
+# following distance does not change. When the lead pulls away the extra goes with it.
+# Live: /data/stop_gap holds the extra metres (default 1.5; 0 = off; clamped 0-3).
+SG_DEFAULT = 1.5
+SG_FILE = '/data/stop_gap'
+SG_LIMITS = (0.0, 3.0)
+SG_LEAD_V = [0.5, 1.5]       # m/s predicted lead speed: full .. none
+SG_SLEW = 0.05               # m per update when the setting changes
+SG_FILE_PERIOD = 20          # updates between file reads (1 s)
+
+
+def read_stop_gap():
+  try:
+    with open(SG_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return SG_DEFAULT
+  if len(vals) != 1 or not np.isfinite(vals[0]):
+    return SG_DEFAULT
+  return float(np.clip(vals[0], *SG_LIMITS))
+
+
+def stop_gap_shift(v_lead_traj, extra):
+  # metres to move a lead obstacle back at each horizon step (see SG_* above)
+  return extra * np.interp(v_lead_traj, SG_LEAD_V, [1., 0.])
+
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -271,6 +301,9 @@ class LongitudinalMpc:
     self._cf_cnt = 0
     self._cf_shift = 0.0
     self._cf_tf = None
+    self._sg_target = SG_DEFAULT
+    self._sg = None
+    self._sg_cnt = 0
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -409,6 +442,14 @@ class LongitudinalMpc:
       self._cf_tf = t_follow
     self._cf_tf = min(self._cf_tf + float(np.clip(tf_target - self._cf_tf, -CF_TF_IN, CF_TF_OUT)), t_follow)
     t_follow = self._cf_tf
+
+    # standstill gap (see SG_* above)
+    if self._sg_cnt % SG_FILE_PERIOD == 0:
+      self._sg_target = read_stop_gap()
+    self._sg_cnt += 1
+    if self._sg is None:
+      self._sg = self._sg_target
+    self._sg += float(np.clip(self._sg_target - self._sg, -SG_SLEW, SG_SLEW))
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
     lead_xv_0 = self.process_lead(radarstate.leadOne, 0)
@@ -417,8 +458,10 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift
+    lead_0_obstacle = (lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift -
+                       stop_gap_shift(lead_xv_0[:,1], self._sg))
+    lead_1_obstacle = (lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift -
+                       stop_gap_shift(lead_xv_1[:,1], self._sg))
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
