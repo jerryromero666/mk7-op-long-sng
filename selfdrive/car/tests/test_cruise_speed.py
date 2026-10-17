@@ -165,8 +165,9 @@ class TestVCruiseHelper:
                                                   ("99", 45), ("nan", 40), ("junk", 40)])
   def test_set_min(self, tmp_path, monkeypatch, file_text, min_mph):
     """
-    Asserts SET never starts below /data/set_min_mph: SET under it gives it, above it gives vEgo,
-    RES restores the earlier set speed, experimental mode keeps its own higher start.
+    Asserts SET at a stop / under 10 mph never starts below /data/set_min_mph, SET while rolling at 10 mph or
+    more is stock (vEgo, at least 25 mph), RES restores the earlier set speed, experimental mode keeps its own
+    higher start.
     """
     live_file = tmp_path / "set_min_mph"
     if file_text is not None:
@@ -175,11 +176,19 @@ class TestVCruiseHelper:
     monkeypatch.setattr(set_min_speed, "DEFAULT_MPH", SET_MIN_DEFAULT_MPH)
     min_kph = int(round(min_mph * IMPERIAL_INCREMENT))
 
-    for v_ego_mph in (0, 5, 20, min_mph - 1, min_mph + 5, 70):
+    # at a stop / pulling away: the minimum
+    for v_ego_mph in (0, 2, 5, 9.9):
       self.reset_cruise_speed_state()
       self.enable(v_ego_mph * CV.MPH_TO_MS, False, False)
-      assert self.v_cruise_helper.v_cruise_kph == max(min_kph, int(round(v_ego_mph * CV.MPH_TO_KPH)))
-      assert round(self.v_cruise_helper.v_cruise_kph * CV.KPH_TO_MPH) == max(min_mph, v_ego_mph)
+      assert self.v_cruise_helper.v_cruise_kph == min_kph
+      assert round(self.v_cruise_helper.v_cruise_kph * CV.KPH_TO_MPH) == min_mph
+
+    # rolling (11 mph and up; vEgo is float32, so exactly 10 mph is on the edge): stock, never sped up to the minimum
+    for v_ego_mph in (11, 20, 30, min_mph - 1, min_mph + 5, 70):
+      self.reset_cruise_speed_state()
+      self.enable(v_ego_mph * CV.MPH_TO_MS, False, False)
+      assert self.v_cruise_helper.v_cruise_kph == max(V_CRUISE_INITIAL, int(round(v_ego_mph * CV.MPH_TO_KPH)))
+      assert round(self.v_cruise_helper.v_cruise_kph * CV.KPH_TO_MPH) == max(25, v_ego_mph)
 
     # experimental mode start is higher than any minimum
     self.reset_cruise_speed_state()

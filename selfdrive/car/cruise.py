@@ -3,7 +3,7 @@ import numpy as np
 
 from cereal import car
 from openpilot.common.constants import CV
-from openpilot.selfdrive.car.set_min_speed import read_set_min_mph
+from openpilot.selfdrive.car import set_min_speed
 from openpilot.sunnypilot.selfdrive.car.cruise_ext import VCruiseHelperSP
 
 
@@ -146,8 +146,10 @@ class VCruiseHelper(VCruiseHelperSP):
 
     initial_experimental_mode = experimental_mode and not dynamic_experimental_control
     initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if initial_experimental_mode else V_CRUISE_INITIAL
-    # Set min: never start below /data/set_min_mph (1.6 km/h per mph, like the imperial +/- steps)
-    initial = max(initial, read_set_min_mph() * IMPERIAL_INCREMENT)
+    # Set min: SET at a stop / under 10 mph never starts below /data/set_min_mph (1.6 km/h per mph, like the
+    # imperial +/- steps); SET while rolling faster is stock (current speed, at least 25 mph)
+    if set_min_speed.applies(CS.vEgo):
+      initial = max(initial, set_min_speed.read_set_min_mph() * IMPERIAL_INCREMENT)
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
