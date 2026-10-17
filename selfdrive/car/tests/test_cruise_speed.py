@@ -4,13 +4,16 @@ import numpy as np
 
 from openpilot.common.parameterized import parameterized_class
 from cereal import log
-from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_MIN, V_CRUISE_MAX, V_CRUISE_INITIAL, IMPERIAL_INCREMENT
+from openpilot.selfdrive.car import set_min_speed
+from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_MIN, V_CRUISE_MAX, V_CRUISE_INITIAL, IMPERIAL_INCREMENT, \
+                                           V_CRUISE_INITIAL_EXPERIMENTAL_MODE
 from cereal import car, custom
 from openpilot.common.constants import CV
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 
 ButtonEvent = car.CarState.ButtonEvent
 ButtonType = car.CarState.ButtonEvent.Type
+SET_MIN_DEFAULT_MPH = set_min_speed.DEFAULT_MPH
 
 
 def run_cruise_simulation(cruise, e2e, personality, t_end=20.):
@@ -47,6 +50,12 @@ class TestCruiseSpeed:
 # TODO: test pcmCruise and pcmCruiseSpeed
 @parameterized_class(('pcm_cruise', 'pcm_cruise_speed'), [(False, True)])
 class TestVCruiseHelper:
+  @pytest.fixture(autouse=True)
+  def stock_set_min(self, monkeypatch):
+    # the other tests expect stock SET (25 mph minimum); test_set_min sets its own
+    monkeypatch.setattr(set_min_speed, "LIVE_FILE", "/nonexistent/set_min_mph")
+    monkeypatch.setattr(set_min_speed, "DEFAULT_MPH", set_min_speed.MIN_LIMIT)
+
   def setup_method(self):
     self.CP = car.CarParams(pcmCruise=self.pcm_cruise)
     self.CP_SP = custom.CarParamsSP(pcmCruiseSpeed=self.pcm_cruise_speed)
@@ -151,3 +160,37 @@ class TestVCruiseHelper:
           self.enable(float(v_ego), experimental_mode, dynamic_experimental_control)
           assert V_CRUISE_INITIAL <= self.v_cruise_helper.v_cruise_kph <= V_CRUISE_MAX
           assert self.v_cruise_helper.v_cruise_initialized
+
+  @pytest.mark.parametrize("file_text, min_mph", [(None, 40), ("40", 40), ("35\n", 35), ("25", 25), ("10", 25),
+                                                  ("99", 45), ("nan", 40), ("junk", 40)])
+  def test_set_min(self, tmp_path, monkeypatch, file_text, min_mph):
+    """
+    Asserts SET never starts below /data/set_min_mph: SET under it gives it, above it gives vEgo,
+    RES restores the earlier set speed, experimental mode keeps its own higher start.
+    """
+    live_file = tmp_path / "set_min_mph"
+    if file_text is not None:
+      live_file.write_text(file_text)
+    monkeypatch.setattr(set_min_speed, "LIVE_FILE", str(live_file))
+    monkeypatch.setattr(set_min_speed, "DEFAULT_MPH", SET_MIN_DEFAULT_MPH)
+    min_kph = int(round(min_mph * IMPERIAL_INCREMENT))
+
+    for v_ego_mph in (0, 5, 20, min_mph - 1, min_mph + 5, 70):
+      self.reset_cruise_speed_state()
+      self.enable(v_ego_mph * CV.MPH_TO_MS, False, False)
+      assert self.v_cruise_helper.v_cruise_kph == max(min_kph, int(round(v_ego_mph * CV.MPH_TO_KPH)))
+      assert round(self.v_cruise_helper.v_cruise_kph * CV.KPH_TO_MPH) == max(min_mph, v_ego_mph)
+
+    # experimental mode start is higher than any minimum
+    self.reset_cruise_speed_state()
+    self.enable(0., True, False)
+    assert self.v_cruise_helper.v_cruise_kph == V_CRUISE_INITIAL_EXPERIMENTAL_MODE
+
+    # RES at a stop restores the earlier set speed, even below the minimum
+    self.reset_cruise_speed_state()
+    self.v_cruise_helper.v_cruise_kph = 30 * IMPERIAL_INCREMENT
+    self.v_cruise_helper.v_cruise_kph_last = 30 * IMPERIAL_INCREMENT
+    CS = car.CarState(vEgo=0.)
+    CS.buttonEvents = [ButtonEvent(type=ButtonType.resumeCruise)]
+    self.v_cruise_helper.initialize_v_cruise(CS, False, False)
+    assert self.v_cruise_helper.v_cruise_kph == 30 * IMPERIAL_INCREMENT
