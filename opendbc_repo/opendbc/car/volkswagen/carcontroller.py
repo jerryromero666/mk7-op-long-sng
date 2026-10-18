@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, structs
@@ -9,6 +11,41 @@ from opendbc.car.volkswagen.values import CanBus, CarControllerParams, Volkswage
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
+
+# Announce brake (MQBStandstillManager, live tuning). Drives 340-344 (mk7_stop_check v1.1, stop 10): the early stop
+# announcement latches HMS=4 / ACC_07 Anfahren as soon as the ESP answers it (bit 63, ~2 mph). On 7 of ~24 stops that
+# happened 0.24-1.8 s BEFORE openpilot's stopping state, while openpilot was still in pid asking -0.3 to -0.5 and
+# ACC_06 did not say Anhalten. The TSK takes HMS=4 / Anfahren without Anhalten as "drive off": its target
+# (Motor_20 TSK_a_Soll_gradientenbegrenzt) jumped from -0.4 to +0.2 within 0.04 s, the brakes let go, the wheels went
+# from -0.47 to +0.39 m/s2 and the speed ROSE 1.7 -> 2.2 mph ("slight roll"). Once ACC_06 said Anhalten (stopping
+# state, -0.95 -> -1.25 in 0.2 s) the TSK followed again (-0.5, -0.9, -1.2 in 0.3 s) and the wheels grabbed at -1.55
+# ("stop"). Route 33d is the same effect (announcing at 2.6 m/s: "the car stopped slowing once HMS=4 latched" with
+# -0.8 asked), and mk7_hold_trace H8. Stops where ACC_06 already said Anhalten when HMS=4 latched never rose and ended
+# at -0.85 m/s2 (median of 12) against -1.51 for the 3 latched more than 0.2 s early.
+# With announce brake set, from the latch on, while openpilot does not ask to accelerate, ACC_06 says Anhalten (not
+# Anfahren) with openpilot's own request. That is the state every announced
+# stop is in a moment later anyway (HMS=4 + ACC_07 Anfahren + ACC_06 Anhalten with a negative request: stop 10 from
+# -0.96 s, and every stop that latched after the stopping state started), only entered at the latch, so the TSK keeps
+# braking. In openpilot's stopping state while still rolling, its ramp to stopAccel (6 m/s3 on this car: the "-1.25 at
+# ~2 mph" bump) is followed at the announce brake rate and never eases. ACC_07 (HMS=4 / Anfahren), the announcement,
+# the bit 53 path, the parent state machine, standstill (openpilot's stopAccel) and the launch are unchanged.
+# Live: /data/announce_brake holds the rate in m/s3 (1.0-6.0; 6 = openpilot's own ramp, only the Anhalten bit), e.g.
+# "1.5", read about once a second; no file, 0 or anything unreadable = off (frames as before, bit for bit).
+ANNOUNCE_BRAKE_FILE = '/data/announce_brake'
+ANNOUNCE_BRAKE_RATE_LIMITS = (1.0, 6.0)    # m/s3
+ANNOUNCE_BRAKE_PERIOD = 50                 # standstill manager updates between file reads (1 Hz at 50 Hz)
+
+
+def read_announce_brake() -> float:
+  """-> hand-over rate m/s3; 0 = off."""
+  try:
+    with open(ANNOUNCE_BRAKE_FILE) as f:
+      val = float(f.read().strip())
+  except (OSError, ValueError):
+    return 0.0
+  if not math.isfinite(val) or val <= 0.0:
+    return 0.0
+  return float(np.clip(val, *ANNOUNCE_BRAKE_RATE_LIMITS))
 
 
 class HCAMitigation:
@@ -88,6 +125,13 @@ class MQBStandstillManager:
   ANNOUNCE_FRAMES = 20         # 0.4 s at 50 Hz: the window in front of every fault-free hold (332/333)
   RELEASE_SPEED = 1.5          # m/s: the announced stop ends once driving again; a new slowdown re-announces
   UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
+  # Announce brake (ANNOUNCE_BRAKE_FILE) never brakes while openpilot asks to accelerate (not stopping): then it sends
+  # today's frames (the launch, or the planner letting go in the last metres). After openpilot pushed harder than
+  # ANNOUNCE_BRAKE_PUSH it waits ANNOUNCE_BRAKE_HOLDOFF before braking with Anhalten: under today's frames the TSK
+  # target drops to +0.2 at once, with Anhalten it would come down from the push at only 4 m/s3 (sim: the camera losing
+  # the car ahead in the last metre, openpilot pushing +1.6, then braking again: 8 more collisions without the wait).
+  ANNOUNCE_BRAKE_PUSH = 0.3    # m/s2
+  ANNOUNCE_BRAKE_HOLDOFF = 25  # frames (0.5 s at 50 Hz)
 
   def __init__(self, CCP):
     self._CCP = CCP
@@ -100,11 +144,33 @@ class MQBStandstillManager:
     self._announce_seen = False  # ESP bit 63 seen during that announcement
     self._stop_announced = False # this stop's announcement is over (until vEgo > RELEASE_SPEED)
     self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
+    self._ab_rate = 0.0          # announce brake (ANNOUNCE_BRAKE_FILE): hand-over rate m/s3, 0 = off
+    self._ab_cnt = 0
+    self._ab_on = False          # announce brake sent the last frame
+    self._ab_out = 0.0           # ... and this request
+    self._ab_push = self.ANNOUNCE_BRAKE_HOLDOFF   # frames since openpilot asked for more than ANNOUNCE_BRAKE_PUSH
+
+  def _announce_brake(self, accel: float, stopping: bool, starting: bool, v: float) -> tuple[float, bool, bool]:
+    """Announced hold, HMS=4 latched: (accel, stopping, starting) for ACC_06 (see ANNOUNCE_BRAKE_FILE)."""
+    if self._ab_rate <= 0.0 or self._ab_push < self.ANNOUNCE_BRAKE_HOLDOFF or (accel > 0.0 and not stopping):
+      self._ab_on = False
+      return accel, stopping, starting
+    out = min(accel, 0.0)
+    if stopping and v > 0.0 and self._ab_on:
+      # openpilot's stopping state while rolling: its ramp to stopAccel at the announce brake rate, never easing
+      out = min(self._ab_out, max(out, self._ab_out - self._ab_rate * DT_CTRL * self._CCP.ACC_CONTROL_STEP))
+    self._ab_on = True
+    self._ab_out = out
+    return out, True, False
 
   def update(self, CS, long_active: bool, accel: float, stopping: bool, starting: bool
              ) -> tuple[bool, float, bool, bool, bool | None, bool | None]:
     esp_starting_override: bool | None = None
     esp_stopping_override: bool | None = None
+    if self._ab_cnt % ANNOUNCE_BRAKE_PERIOD == 0:
+      self._ab_rate = read_announce_brake()
+    self._ab_cnt += 1
+    self._ab_push = 0 if accel > self.ANNOUNCE_BRAKE_PUSH else min(self._ab_push + 1, self.ANNOUNCE_BRAKE_HOLDOFF)
 
     # CS.out.standstill = pcmCruise AND esp_hold_confirmation, always False on a hill
     # before hold is acquired. Use vEgo threshold so the override engages as soon as
@@ -154,7 +220,9 @@ class MQBStandstillManager:
     # bit 53 -> the ESP handed over within 0.04 s, HMS=4 and the TSK held. The parent's State 2 does that.
     if hms_active and self._announced_hold and not CS.esp_hold_confirmation:
       self._prev_hold_confirmation = CS.esp_hold_confirmation
+      accel, stopping, starting = self._announce_brake(accel, stopping, starting, v)
       return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
+    self._ab_on = False
 
     # HMS=4 LATCH.
     # Drive data (0000022b, 5.6% grade) shows the ESP tolerates a long steady HMS=4 --
