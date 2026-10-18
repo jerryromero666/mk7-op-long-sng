@@ -2021,7 +2021,7 @@ def end_detail(s):
                f" ({s['tail_tot']:.1f} s in all after the peak), from {f1(mph(s['tail_v0']), 1)} to {f1(mph(s['tail_v1']), 1)} mph,"
                f" {f1(s['tail_dist'], 1)} m, asking {f1(s['tail_ask'], 2)}")
   if isnum(s['snap_from']):
-    out.append(f"  stopping snap: " + (f"{s['snap_from']:.2f} > {f1(s['snap_to'], 2)} in {f1(s['snap_t'], 2)} s"
+    out.append("  stopping snap: " + (f"{s['snap_from']:.2f} > {f1(s['snap_to'], 2)} in {f1(s['snap_t'], 2)} s"
                                        f" ({f1(s['snap_rate'], 1)} m/s3)" if s['snap'] else
                                        f"none (handed over at {s['snap_from']:.2f}, kept)")
                + f"; the wheels then built up at {f1(s['snap_wj'], 1)} m/s3 to {f1(s['snap_wmin'], 2)}"
