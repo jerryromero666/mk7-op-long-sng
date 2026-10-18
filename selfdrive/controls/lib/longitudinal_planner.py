@@ -14,6 +14,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.launch_boost import LaunchBoost
 from openpilot.selfdrive.controls.lib.pickup_accel import PickupAccel
+from openpilot.selfdrive.controls.lib.stop_hold import StopHold
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -58,6 +59,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.dt = dt
     self.launch_boost = LaunchBoost(dt)
     self.pickup_accel = PickupAccel()
+    self.stop_hold = StopHold(dt)
     self.allow_throttle = True
 
     self.a_desired = init_a
@@ -165,6 +167,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     action_t =  self.CP.longitudinalActuatorDelay + DT_MDL
     output_a_target_mpc, output_should_stop_mpc = get_accel_from_plan(self.v_desired_trajectory, self.a_desired_trajectory, CONTROL_N_T_IDX,
                                                                         action_t=action_t, vEgoStopping=self.CP.vEgoStopping)
+    # Stop hold (stop_hold.py): no brake let-go in the last metres of a stop. Off without /data/stop_hold.
+    v_target = np.interp(action_t, CONTROL_N_T_IDX, self.v_desired_trajectory)
+    output_a_target_mpc, output_should_stop_mpc = self.stop_hold.update(output_a_target_mpc, output_should_stop_mpc,
+                                                                        self.v_desired_trajectory[0], v_target,
+                                                                        self.a_desired_trajectory[0], v_ego, reset_state, self.CP)
     # Launch boost from a dead stop behind a departing lead (launch_boost.py), ACC mode only. It only adds
     # accel, before the accel clip, and while it is on longcontrol leaves stopping. The boosted car runs
     # ahead of the MPC's own state, so the MPC is put on the car's real speed and commanded accel: what
