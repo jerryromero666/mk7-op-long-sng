@@ -52,6 +52,25 @@ WHAT IT LOOKS AT
     (the rest under 5 mph), 'other'. Presses at a standstill are only counted.
  C. Per branch: driving time, stops and presses per hour of openpilot driving, the shape labels, medians and worst cases,
     how often the car was above 25 / 30 / 35 mph, and panda-blocked ACC_06 frames right after a press vs elsewhere.
+ D. (v1.2) The end of every openpilot stop in three pieces (real drives 340-344: 'rolling rolling HARDER BRAKE, slight roll,
+    stop'):
+      HMS 4 latch     when ACC_07 HMS went to 4 (Anfahren) before the stop, relative to shouldStop and to pid -> stopping
+                      (minus = HMS 4 came first), and what latched it: ann = the early stop announcement of
+                      t2_hill_announce2 (its HMS 1 went out with ACC_06 Anfahren), par = the parent state machine (its HMS 1
+                      went out with ACC_06 Anhalten), oth = another way
+      HMS 4 window    HMS 4 on while openpilot still asked to brake (under -0.15) with no ACC_06 Anhalten, outside the
+                      stopping state, the car rolling: when, how long, the TSK target's max (Motor_20), the wheels' max and
+                      the speed rise (did the car speed up?) up to 0.5 s after it (the car answers late; both counted once
+                      openpilot had asked to brake for 0.5 s, so the lagging end of a launch is left out), metres rolled in
+                      it. 'tsk-release' = under HMS 4 (in the window or anywhere else in the approach, e.g. a latch by the
+                      parent machine or one left over from a launch) the TSK target was at 0 or above after openpilot had
+                      asked to brake for 0.3 s, or the wheels at +0.1 or above after 0.5 s of it
+      planner tail    the last stretch between the peak and the stopping state with the request weaker than -0.6 (the
+                      'slight roll' feel): how long, from what speed to what speed, metres, the mean request
+      stopping snap   the request's jump when the stopping state took over (from, to, s to reach -1.2, steepest change over
+                      0.1 s in m/s3) and the wheels after it (steepest build-up m/s3 = the bump, strongest braking)
+    Per branch: counts and medians of these; the BOTTOM LINE says what made the 'slight roll' (planner tail vs TSK release
+    under HMS 4) and the bump (the stopping snap), with numbers.
 Only reads logs. Writes nothing. Exit codes: 0 = report printed, 1 = no openpilot stop and no brake press found, 2 = problem.
 """
 import sys
@@ -65,7 +84,7 @@ import re        # noqa: E402
 import statistics as st  # noqa: E402
 import time      # noqa: E402
 
-TOOL_VERSION = '1.1 (2026-10-18)'
+TOOL_VERSION = '1.2 (2026-10-18)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
@@ -105,6 +124,16 @@ ROLL_AFTER = -1.5
 ROLL_S = 0.3           # ... for at least this long above ROLL_V = the car rolled with the brakes eased
 ROLL_V = 0.9           # m/s (2 mph; slower is the normal soft end of a stop)
 MOVED_V = 0.3          # m/s: moved again within 2.5 s after the stop without gas / openpilot starting
+# ---- v1.2: the end of a stop (HMS 4 window, planner tail, stopping snap)
+WIN_ASK = -0.15        # m/s2: openpilot asking at least this much braking ...
+WIN_MIN_S = 0.06       # s: ... with HMS 4 on, no ACC_06 Anhalten, outside the stopping state, rolling, this long = HMS 4 window
+RESP_S = 0.5           # s: the car's answer (wheels, speed) is looked at this long past the window (actuator delay)
+REL_TSK = 0.0          # TSK target at or above this after 0.3 s of braking asked under HMS 4 = 'tsk-release' ...
+REL_TSK_S = 0.3
+REL_WHL = 0.1          # ... or the wheels at or above this after RESP_S of braking asked
+TAIL_WEAK = -0.6       # m/s2: the request weaker than this between the peak and the stopping state = the planner's tail
+TAIL_MIN_S = 0.5       # s: a tail at least this long is counted
+SNAP_RATE_S = 0.1      # s: the snap's rate = the steepest change of the request over this long
 LABELS = ['smooth', 'late-hard', 'hard-release-grab', 'hard-into-stopping', 'hard-eased', 'creep']
 LABEL_SHORT = {'smooth': 'sm', 'late-hard': 'lh', 'hard-release-grab': 'rg', 'hard-into-stopping': 'is',
                'hard-eased': 'he', 'creep': 'cr', '?': '?'}
@@ -852,7 +881,7 @@ class Win:
     av = grid_interp(np, D.gv_t, D.a_v, G, gap=0.1) if len(D.gv_t) else np.full(len(G), NAN)
     self.whl_src_v = ~np.isfinite(whl) & np.isfinite(av)
     self.whl = np.where(np.isfinite(whl), whl, av)
-    for key in ('hms', 'a06_stop', 'a07_stop', 'hold53', 'esp63'):
+    for key in ('hms', 'a06_stop', 'a06_go', 'a07_stop', 'hold53', 'esp63'):
       setattr(self, key, hold(np, *D.c[key], G, stale=0.2))
     bt = np.array([b[0] for b in D.blocked if b[1] == 'ACC_06'])
     self.blk = (np.histogram(bt, bins=np.append(G - DT / 2, G[-1] + DT / 2))[0] if len(bt) and len(G)
@@ -1158,8 +1187,157 @@ def analyse_stop(D, t_still, t_still_end, prev_end):
   s['has_hms'] = len(c['hms'][0]) > 0
   s['has_esp21'] = len(c['hold53'][0]) > 0
   s['whl_v'] = bool(W.whl_src_v[max(ks - n1, 0):ks + 1].any())
+  stop_end(np, W, s, k0, ks, kst, jw, h_lo)
   W.compact()
   return s
+
+
+# ============================================================================================ D. the end of a stop (v1.2)
+def steady(np, mask, n):
+  """True where mask has been True for the last n samples (this one included)."""
+  c = np.convolve(mask.astype(np.int32), np.ones(max(n, 1), dtype=np.int32), mode='full')[:len(mask)]
+  return c >= max(n, 1)
+
+
+def after_any(np, mask, n):
+  """True where mask was True at this sample or in the n samples before it."""
+  c = np.convolve(mask.astype(np.int32), np.ones(n + 1, dtype=np.int32), mode='full')[:len(mask)]
+  return c > 0
+
+
+END_KEYS = {'lat_t': NAN, 'lat_ss': NAN, 'lat_stp': NAN, 'lat_src': '', 'win_n': 0, 'win_t': NAN, 'win_dur': 0.0,
+            'win_src': '', 'win_anh': False, 'win_end': '', 'win_ask': NAN, 'win_tsk': NAN, 'win_whl': NAN, 'win_dv': NAN,
+            'win_dist': NAN, 'win_vlo': NAN, 'win_vhi': NAN, 'tsk_rel': False, 'rel_by': '', 'rel_in': False, 'rel_t': NAN, 'tail_t': NAN,
+            'tail_dur': 0.0, 'tail_tot': 0.0, 'tail_v0': NAN, 'tail_v1': NAN, 'tail_dist': NAN, 'tail_ask': NAN,
+            'snap': False, 'snap_from': NAN, 'snap_to': NAN, 'snap_t': NAN, 'snap_rate': NAN, 'snap_wj': NAN,
+            'snap_wmin': NAN, 'snap_wmin_t': NAN}
+
+
+def stop_end(np, W, s, k0, ks, kst, jw, h_lo):
+  """The end of a stop in three pieces (s from the stop; see D in the header).
+  1. HMS 4: the latch (first ACC_07 HMS change to 4 in the approach) and the window where HMS 4 (Anfahren) was on while
+     openpilot still asked to brake, without ACC_06 Anhalten and outside the stopping state, the car rolling. Real drive
+     341 event 10: the announcement latched HMS 4 at 1.8 mph while pid asked -0.47; the TSK target went -0.4 -> +0.2 for
+     0.45 s, the wheels -0.47 -> +0.39 and the speed rose 1.7 -> 2.2 mph until ACC_06 Anhalten came.
+  2. the planner's tail: the last stretch from the peak to the stopping state with the request weaker than -0.6.
+  3. the stopping snap: the request's jump to -1.2 at stoppingDecelRate and the wheels' build-up after it."""
+  s.update(END_KEYS)
+  G, t_still = W.G, s['t']
+  n_tsk, n_resp, n_rate = int(round(REL_TSK_S / DT)), int(round(RESP_S / DT)), int(round(SNAP_RATE_S / DT))
+  # ---- 1a. the latch
+  lat = next(((t, a, b) for t, a, b in s['hms_ch'] if b == 4 and a != 4 and t <= 0.5), None)
+  t_lat = NAN
+  if lat is not None:
+    t_lat = t_still + lat[0]
+    s['lat_t'] = lat[0]
+    s['lat_ss'] = lat[0] - s['t_ss']
+    s['lat_stp'] = lat[0] - s['t_stp']
+    kl = W.k(t_lat)
+    if lat[1] == 1:
+      j0 = max(kl - int(round(0.5 / DT)), 0)
+      h1 = np.flatnonzero(W.hms[j0:kl + 1] == 1) + j0
+      # the announcement sends ACC_06 Anfahren (not Anhalten) with its HMS 1; the parent machine sends Anhalten
+      ann = len(h1) and bool(np.any(W.a06_go[int(h1[0]):kl + 1] > 0.5))
+      s['lat_src'] = 'ann' if ann else 'par'
+    else:
+      s['lat_src'] = 'oth'
+  # ---- 1b. the HMS 4 window and the TSK release
+  i0 = min(k0 if k0 is not None else ks, W.k(h_lo))
+  rng = np.zeros(len(G), dtype=bool)
+  rng[i0:ks + 1] = True
+  with np.errstate(invalid='ignore'):
+    ask = np.isfinite(W.out) & (W.out < WIN_ASK)
+    hms4 = W.hms == 4
+    roll = W.v >= STILL_V
+    noanh = ~(W.a06_stop > 0.5) & ~(W.lcs == 2)
+    m_any = hms4 & roll & ask & rng
+    m_win = m_any & noanh
+    rel_t = m_any & steady(np, ask, n_tsk) & (W.tsk >= REL_TSK)
+    st_resp = steady(np, ask, n_resp)
+    rel_w = after_any(np, hms4 & roll & rng, n_resp) & roll & rng & st_resp & (W.whl >= REL_WHL)
+  kr = np.flatnonzero(rel_t | rel_w)
+  runs = [(a, b) for a, b in runs_of(np, m_win) if (b - a) * DT >= WIN_MIN_S - 1e-9]
+  s['win_n'] = len(runs)
+  pick, anh = None, False
+  if runs and lat is not None:
+    pick = next(((a, b) for a, b in runs if abs(G[a] - t_lat) <= 0.1), None)
+  if pick is None and runs and len(kr):
+    pick = next(((a, b) for a, b in runs if a <= kr[0] <= b - 1 + n_resp), None)
+  if pick is None and runs:
+    pick = max(runs, key=lambda r: r[1] - r[0])
+  if pick is None and len(kr):      # a release outside any such window (e.g. with Anhalten on): measure its HMS 4 stretch
+    pick = next(((a, b) for a, b in runs_of(np, m_any) if a <= kr[0] <= b - 1 + n_resp), None)
+    anh = pick is not None
+  if len(kr):
+    s['tsk_rel'] = True
+    s['rel_by'] = '+'.join(x for x, m in (('tsk', rel_t), ('whl', rel_w)) if m.any())
+    s['rel_t'] = float(G[kr[0]] - t_still)
+  if pick is not None:
+    a, b = pick
+    kz = min(b - 1 + n_resp, ks)
+    s['win_t'], s['win_dur'], s['win_anh'] = float(G[a] - t_still), (b - a) * DT, anh
+    s['win_src'] = s['lat_src'] if lat is not None and abs(G[a] - t_lat) <= 0.1 else 'oth'
+    if b > ks or not (W.v[b] >= STILL_V):
+      s['win_end'] = 'stop'
+    elif W.a06_stop[b] > 0.5 and not anh:
+      s['win_end'] = 'anh'
+    elif W.lcs[b] == 2 and not anh:
+      s['win_end'] = 'stp'
+    elif W.hms[b] != 4:
+      s['win_end'] = 'hms'
+    else:
+      s['win_end'] = 'ask'
+    s['win_ask'] = nmean(W.out[a:b])
+    s['win_tsk'] = nmax(W.tsk[a:b])
+    # the car's answer: from the moment openpilot had asked to brake for RESP_S (not the lagging end of a launch)
+    k5 = np.flatnonzero(st_resp[a:kz + 1])
+    if len(k5):
+      k5 = a + int(k5[0])
+      s['win_whl'] = nmax(W.whl[k5:kz + 1])
+      vv = W.v[k5:kz + 1]
+      km = nargmax(vv)
+      if km is not None:
+        s['win_vlo'], s['win_vhi'] = nmin(vv[:km + 1]), float(vv[km])
+        s['win_dv'] = s['win_vhi'] - s['win_vlo']
+    s['win_dist'] = float(np.nansum(W.v[a:b]) * DT)
+    s['rel_in'] = bool(len(kr) and np.any((kr >= a) & (kr <= kz)))
+  # ---- 2. the planner's tail (to the stopping state, or to the stop if it came later)
+  kend = kst if kst is not None and kst <= ks else ks
+  if k0 is not None and kend > k0:
+    kp = nargmin(W.out[k0:kend])
+    if kp is not None:
+      kp += k0
+      seg = W.out[kp:kend]
+      with np.errstate(invalid='ignore'):
+        weak = np.isfinite(seg) & (seg > TAIL_WEAK)
+        strong = np.flatnonzero(np.isfinite(seg) & (seg <= TAIL_WEAK))
+      kt = kp + int(strong[-1]) + 1 if len(strong) else kp
+      s['tail_t'], s['tail_dur'], s['tail_tot'] = float(G[kt] - t_still), (kend - kt) * DT, float(weak.sum()) * DT
+      s['tail_v0'], s['tail_v1'] = float(W.v[kt]), float(W.v[kend])
+      s['tail_dist'] = float(np.nansum(W.v[kt:kend]) * DT)
+      s['tail_ask'] = nmean(W.out[kt:kend]) if kend > kt else NAN
+  # ---- 3. the stopping snap
+  if kst is not None:
+    kz2 = min(max(kst, ks) + int(round(AT_STOP_S / DT)), len(G) - 1)
+    seg = W.out[kst:kz2 + 1]
+    frm = s['carried']
+    s['snap_from'], s['snap_to'] = frm, nmin(seg)
+    if frm == frm and frm > STOP_ACCEL + 0.01:
+      s['snap'] = True
+      with np.errstate(invalid='ignore'):
+        idx = np.flatnonzero(np.isfinite(seg) & (seg <= STOP_ACCEL + 1e-6))
+      if len(idx):
+        k = kst + int(idx[0])
+        x0 = W.out[k - 1] if W.out[k - 1] == W.out[k - 1] else frm
+        x1 = W.out[k]
+        f = (x0 - STOP_ACCEL) / (x0 - x1) if x0 > x1 else 1.0
+        s['snap_t'] = max(float(G[k - 1] + min(max(f, 0.0), 1.0) * DT - G[kst]), 0.0)
+      if kz2 + 1 - n_rate > kst - 1:
+        s['snap_rate'] = nmin((W.out[kst - 1 + n_rate:kz2 + 1] - W.out[kst - 1:kz2 + 1 - n_rate]) / SNAP_RATE_S)
+    s['snap_wj'] = nmin(jw[kst:kz2 + 1])
+    kw = nargmin(W.whl[kst:max(kst, ks) + 1])
+    if kw is not None:
+      s['snap_wmin'], s['snap_wmin_t'] = float(W.whl[kst + kw]), float(G[kst + kw] - G[kst])
 
 
 def find_stops(D):
@@ -1352,6 +1530,13 @@ def f1(x, nd=1):
   return f'{round(x, nd) + 0.0:.{nd}f}'
 
 
+def f1p(x, nd=1):
+  """Like f1 with a sign (+0.2 / -0.4)."""
+  if not isnum(x):
+    return '-'
+  return f'{round(x, nd) + 0.0:+.{nd}f}'
+
+
 def clock(t):
   return f'{int(t // 60)}:{int(t % 60):02d}'
 
@@ -1432,7 +1617,7 @@ def print_stops(stops):
     say(f"  {s['n']:2d} {s['rid']:>5} {s['clock']:>6}  {set_txt(s):<7} {fmt(mph(s['top']), 0, 3)}  {brk} {peak}"
         f"  {fmt(op['jerk'], 1, 5)}  {rel:<19}  {into:<18}  {fmt(s['fin_out'], 1, 4)}/{fmt(s['fin_whl'], 1, 4)}"
         f" {fmt(s['at_stop'], 1, 4)}  {fmt(s['gap'], 1, 5)}  {drv:>4}  {s['label_op']} / {s['label_car']}"
-        + (f"  [{stop_flags(s)}]" if stop_flags(s) else ''))
+        + (', tsk-release' if s['tsk_rel'] else '') + (f"  [{stop_flags(s)}]" if stop_flags(s) else ''))
 
 
 def print_stop_signals(stops):
@@ -1456,6 +1641,41 @@ def print_stop_signals(stops):
         + '            ' + ' '.join(fmt(F[k], 2, 5) for k in ('plan', 'op', 'sent', 'tsk', 'whl', 'aego'))
         + f"   {grab:<18} {roll:<11} {fmt(s['fin_jerk'], 1, 5)}  {ss_:<14}  {hms_txt(s):<26}  {fmt(s['h53'], 2, 5, plus=True)}"
         f" {fmt(s['e63'], 2, 5, plus=True)} {fmt(s['a06s'], 2, 5, plus=True)} {fmt(s['a07s'], 2, 5, plus=True)}")
+
+
+def win_txt(s):
+  if not s['win_dur'] > 0:
+    return '-'
+  return (f"{s['win_t']:+.2f} {s['win_dur']:.2f} {fmt(s['win_tsk'], 1, 4, plus=True)} {fmt(s['win_whl'], 2, 5, plus=True)}"
+          f" {fmt(mph(s['win_dv']), 1, 4, plus=True)} {fmt(s['win_dist'], 2, 4)} {s['win_end']:<4}")
+
+
+def print_stop_end(stops):
+  say('STOP END IN THREE PIECES (s from the stop unless said, mph, m, m/s2, m/s3; the real drives showed \'rolling rolling HARDER')
+  say('  BRAKE, slight roll, stop\'). HMS 4 latch = when ACC_07 HMS went to 4 before the stop and what latched it (ann = the early')
+  say('  announcement: its HMS 1 went out with ACC_06 Anfahren; par = the parent machine: its HMS 1 had Anhalten; oth = other), vs ss /')
+  say('  vs stp = s after shouldStop / pid -> stopping (minus = HMS 4 came first). HMS 4 window = HMS 4 on while openpilot still')
+  say('  asked to brake (under -0.15) with no ACC_06 Anhalten, outside the stopping state, the car rolling: from, s, TSK target max,')
+  say('  wheels max and speed rise up to 0.5 s after it (once braking was asked for 0.5 s), m rolled in it, what ended it (anh =')
+  say('  ACC_06 Anhalten, stp = stopping state,')
+  say('  stop, hms, ask; * = HMS 4 with Anhalten on, shown because the TSK let go there); R = tsk-release (TSK target at 0 or above')
+  say('  after 0.3 s of braking asked under HMS 4, or the wheels at +0.1 or above after 0.5 s; t = s from the stop). Planner tail =')
+  say('  the last stretch from the peak to the stopping state with the request weaker than -0.6: s, mph from > to, m, mean request.')
+  say('  Stopping snap = request from > to when the stopping state took over, s to reach -1.2, steepest change over 0.1 s; the')
+  say('  wheels after it: steepest build-up (the bump) and strongest braking @ s after the snap)')
+  say('   #  HMS 4 latch            HMS 4 window: from    s   TSK   whl  +mph    m  end   R          planner tail:  s  mph'
+      '         m   ask   stopping snap: from    to     s   m/s3  whl jerk  whl min@s')
+  for s in stops:
+    lat = (f"{s['lat_t']:+.2f} {s['lat_src']:<3} {fmt(s['lat_ss'], 2, 5, plus=True)} {fmt(s['lat_stp'], 2, 5, plus=True)}"
+           if isnum(s['lat_t']) else '-')
+    win = win_txt(s) + ('*' if s['win_anh'] else '')
+    rel = (f"R {s['rel_by']}@{s['rel_t']:+.2f}" if s['tsk_rel'] else '-')
+    tail = (f"{s['tail_dur']:4.1f} {fmt(mph(s['tail_v0']), 1, 4)}>{fmt(mph(s['tail_v1']), 1, 3)} {fmt(s['tail_dist'], 1, 4)}"
+            f" {fmt(s['tail_ask'], 2, 5)}" if isnum(s['tail_t']) else '-')
+    snap = (f"{fmt(s['snap_from'], 2, 5)} {fmt(s['snap_to'], 2, 5)} {fmt(s['snap_t'], 2, 4)} {fmt(s['snap_rate'], 1, 5)}"
+            f"  {fmt(s['snap_wj'], 1, 5)}  {fmt(s['snap_wmin'], 2, 5)}@{fmt(s['snap_wmin_t'], 2, 4)}"
+            if isnum(s['snap_from']) else '-')
+    say(f"  {s['n']:2d}  {lat:<22} {win:<38} {rel:<16} {tail:<29} {snap}" + ('  (creep)' if s['creep'] else ''))
 
 
 def print_presses(presses, n_stand):
@@ -1526,7 +1746,44 @@ def group_stats(name, R, stops, presses, blk_rest, blk_after):
   g['top'] = {m: sum(1 for s in S if not s['creep'] and mph(s['top']) > m) for m in (25, 30, 35)}
   opt = sum(r['stats']['op'] for r in rs)
   g['above'] = {m: (sum(r['stats'][f'op{m}'] for r in rs) / opt if opt > 1 else NAN) for m in (25, 30, 35)}
+  g['end'] = end_stats(shp, S)
   return g
+
+
+def end_stats(shp, S):
+  """Counts and (median, worst) of the three end-of-stop pieces over the stops in the numbers (shp); S = all stops (for the
+  creep stops with a TSK release)."""
+  def mw(vals, worst):
+    vals = [v for v in vals if isnum(v)]
+    return (med(vals), worst(vals) if vals else NAN)
+  lat = [s for s in shp if isnum(s['lat_t'])]
+  win = [s for s in shp if s['win_dur'] > 0 and not s['win_anh']]
+  rel = [s for s in shp if s['tsk_rel']]
+  tail_all = [s for s in shp if isnum(s['tail_t'])]
+  tail = [s for s in tail_all if s['tail_dur'] >= TAIL_MIN_S - 1e-9]     # the medians: over the stops that had a tail
+  snap = [s for s in shp if s['snap']]
+  kst = [s for s in shp if s['kst'] is not None]
+  wj = snap or kst
+  e = {'n': len(shp), 'hms_n': sum(1 for s in shp if s['has_hms']), 'lat': len(lat),
+       'first_ss': sum(1 for s in lat if isnum(s['lat_ss']) and s['lat_ss'] < 0),
+       'first_stp': sum(1 for s in lat if isnum(s['lat_stp']) and s['lat_stp'] < 0),
+       'src': {k: sum(1 for s in lat if s['lat_src'] == k) for k in ('ann', 'par', 'oth')},
+       'lat_ss': mw([s['lat_ss'] for s in lat], min), 'lat_stp': mw([s['lat_stp'] for s in lat], min),
+       'win': len(win), 'win_dur': mw([s['win_dur'] for s in win], max), 'win_ask': mw([s['win_ask'] for s in win], max),
+       'rel': len(rel), 'rel_creep': sum(1 for s in S if s['creep'] and s['tsk_rel']),
+       'rel_dur': mw([s['win_dur'] for s in rel], max), 'rel_ask': mw([s['win_ask'] for s in rel], max),
+       'rel_lat_ss': mw([s['lat_ss'] for s in rel], min),
+       'rel_tsk': mw([s['win_tsk'] for s in rel], max), 'rel_whl': mw([s['win_whl'] for s in rel], max),
+       'rel_dv': mw([mph(s['win_dv']) for s in rel], max), 'rel_dist': mw([s['win_dist'] for s in rel], max),
+       'tail_n': len(tail), 'tail_of': len(tail_all),
+       'tail_dur': mw([s['tail_dur'] for s in tail], max), 'tail_v0': mw([mph(s['tail_v0']) for s in tail], max),
+       'tail_v1': mw([mph(s['tail_v1']) for s in tail], max), 'tail_dist': mw([s['tail_dist'] for s in tail], max),
+       'tail_ask': mw([s['tail_ask'] for s in tail], max),
+       'snap': len(snap), 'snap_of': len(kst), 'snap_from': mw([s['snap_from'] for s in snap], max),
+       'snap_to': mw([s['snap_to'] for s in snap], min), 'snap_t': mw([s['snap_t'] for s in snap], min),
+       'snap_rate': mw([s['snap_rate'] for s in snap], min), 'snap_wj': mw([s['snap_wj'] for s in wj], min),
+       'snap_wmin': mw([s['snap_wmin'] for s in wj], min)}
+  return e
 
 
 def print_groups(groups):
@@ -1557,6 +1814,21 @@ def print_groups(groups):
         f" {g['top'][25]}/{g['top'][30]}/{g['top'][35]} of {n_ap}; openpilot driving time above 25/30/35 mph:"
         f" {'/'.join(f1(g['above'][m] * 100, 0) for m in (25, 30, 35))}%; panda-blocked ACC_06 frames:"
         f" {g['blk_after']} right after a brake press, {g['blk_rest']} elsewhere")
+    e = g['end']
+    if e['n']:
+      say(f"    end of the stop: HMS 4 latched on {e['lat']} of {e['n']} ({', '.join(f'{k} {v}' for k, v in e['src'].items() if v) or '-'}),"
+          f" before shouldStop on {e['first_ss']} (median {f1(e['lat_ss'][0], 2)} s from it, earliest {f1(e['lat_ss'][1], 2)}), before"
+          f" pid -> stopping on {e['first_stp']}; HMS 4 window on {e['win']} ({f1(e['win_dur'][0], 2)} s median, longest"
+          f" {f1(e['win_dur'][1], 2)}); TSK let go (tsk-release) on {e['rel']}"
+          + (f" (TSK target {f1p(e['rel_tsk'][0], 1)}, highest {f1p(e['rel_tsk'][1], 1)}; wheels {f1p(e['rel_whl'][0], 2)} ({f1p(e['rel_whl'][1], 2)});"
+             f" sped up {f1(e['rel_dv'][0], 1)} mph ({f1(e['rel_dv'][1], 1)}); rolled {f1(e['rel_dist'][0], 2)} m ({f1(e['rel_dist'][1], 2)}))"
+             if e['rel'] else '') + (f", plus {e['rel_creep']} creep stop(s)" if e['rel_creep'] else ''))
+      say(f"      planner tail (request weaker than -0.6 before the stopping state) {TAIL_MIN_S:.1f} s or longer on {e['tail_n']} of"
+          f" {e['tail_of']}, on those: {f1(e['tail_dur'][0], 1)} s median (longest {f1(e['tail_dur'][1], 1)}), from {f1(e['tail_v0'][0], 1)} to"
+          f" {f1(e['tail_v1'][0], 1)} mph, {f1(e['tail_dist'][0], 1)} m ({f1(e['tail_dist'][1], 1)}), asking {f1(e['tail_ask'][0], 2)};"
+          f" stopping snap on {e['snap']} of {e['snap_of']}: {f1(e['snap_from'][0], 2)} > {f1(e['snap_to'][0], 2)} in"
+          f" {f1(e['snap_t'][0], 2)} s ({f1(e['snap_rate'][0], 1)} m/s3), wheels after it {f1(e['snap_wj'][0], 1)} m/s3"
+          f" (steepest {f1(e['snap_wj'][1], 1)}) to {f1(e['snap_wmin'][0], 2)} ({f1(e['snap_wmin'][1], 2)})")
 
 
 def pick_compare(groups):
@@ -1643,10 +1915,120 @@ def bottom_line(groups, stops):
               f" slight roll, stop'): the grab came from the planner on {gp} and from the stopping state's -1.2 on {gs}")
   if so:
     out.append('  So: ' + '; '.join(so) + '.')
+  out += end_story(end_stats([s for s in stops if in_numbers(s)], stops))[0]
   return out
 
 
+def end_story(e):
+  """([bottom-line lines], one-line paste version): what made the 'slight roll' and the bump at the end of the stops."""
+  n = e['n']
+  if not n:
+    return [], 'BL end: no stop in the numbers'
+  if e['tail_n']:
+    tail = (f"the planner's tail on {e['tail_n']} of {n} (between its peak and the stopping state the request stayed weaker than"
+            f" -0.6 for {f1(e['tail_dur'][0], 1)} s median, longest {f1(e['tail_dur'][1], 1)}, from {f1(e['tail_v0'][0], 1)} to"
+            f" {f1(e['tail_v1'][0], 1)} mph, {f1(e['tail_dist'][0], 1)} m, asking {f1(e['tail_ask'][0], 2)})")
+  else:
+    tail = f"no planner tail (the request was -0.6 or stronger until the stopping state on all {n})"
+  if e['rel']:
+    rel = (f"the TSK letting go under HMS 4 on {e['rel']} of {n} (HMS 4 on while openpilot still asked {f1(e['rel_ask'][0], 2)},"
+           f" latched {f1p(e['rel_lat_ss'][0], 2)} s from shouldStop, for {f1(e['rel_dur'][0], 2)} s; the TSK target went up to"
+           f" {f1p(e['rel_tsk'][0], 1)}, the wheels to {f1p(e['rel_whl'][0], 2)} (highest {f1p(e['rel_whl'][1], 2)}), the car sped up"
+           f" {f1(e['rel_dv'][0], 1)} mph (most {f1(e['rel_dv'][1], 1)}) and rolled {f1(e['rel_dist'][0], 2)} m)")
+  elif not e['hms_n']:
+    rel = "the TSK release under HMS 4 cannot be checked (ACC_07 is not in the logs)"
+  else:
+    rel = (f"no TSK release under HMS 4 (HMS 4 came before shouldStop on {e['first_ss']} of {e['hms_n']}, with the TSK still"
+           " braking)")
+  if e['rel_creep']:
+    rel += f", plus {e['rel_creep']} creep stop(s) with a TSK release"
+  if e['snap']:
+    bump = (f"the stopping state's snap on {e['snap']} of {n}: the request went from {f1(e['snap_from'][0], 2)} to"
+            f" {f1(e['snap_to'][0], 2)} in {f1(e['snap_t'][0], 2)} s ({f1(e['snap_rate'][0], 1)} m/s3) and the wheels followed at"
+            f" {f1(e['snap_wj'][0], 1)} m/s3 median (steepest {f1(e['snap_wj'][1], 1)}) to {f1(e['snap_wmin'][0], 2)}"
+            f" (strongest {f1(e['snap_wmin'][1], 2)})")
+  else:
+    bump = (f"no snap at the stopping state (every stop handed over at -1.2 or stronger); the wheels' steepest build-up after it"
+            f" {f1(e['snap_wj'][0], 1)} m/s3 median")
+  lines = [f"  End of the stop ({n} stops in the numbers, all branches): slight roll = {tail}; {rel}. Bump = {bump}."]
+  if not e['rel'] and not e['tail_n']:
+    roll = "neither a planner tail nor a TSK release was seen"
+    v = 'none'
+  elif not e['rel'] and not e['hms_n']:
+    roll = (f"the planner's tail is there on {e['tail_n']} of {n}; whether the TSK let go too cannot be told without ACC_07")
+    v = 'tail?'
+  elif not e['rel']:
+    roll = (f"the 'slight roll' is the planner's tail (weak braking before the stopping state, on {e['tail_n']} of {n}), not the"
+            " TSK")
+    v = 'tail'
+  elif 2 * e['rel'] >= n or e['rel'] > e['tail_n']:
+    roll = (f"the 'slight roll' is mostly the TSK letting go under HMS 4 ({e['rel']} of {n} stops: the car sped up"
+            f" {f1(e['rel_dv'][0], 1)} mph while openpilot asked to brake)"
+            + (f"; the planner's tail added to it on {e['tail_n']} of {n}" if e['tail_n'] else ''))
+    v = 'tsk' if not e['tail_n'] else 'tsk+tail'
+  else:
+    roll = (f"the 'slight roll' is the planner's tail ({e['tail_n']} of {n} stops); on {e['rel']} of {n} the TSK also let go"
+            f" under HMS 4 and the car sped up {f1(e['rel_dv'][0], 1)} mph before the stopping state braked")
+    v = 'tail+tsk'
+  if e['snap'] and isnum(e['snap_wj'][0]):
+    bp = (f"the bump is the stopping state jumping from {f1(e['snap_from'][0], 2)} to {f1(e['snap_to'][0], 2)} at"
+          f" {f1(abs(e['snap_rate'][0]), 0)} m/s3, the wheels following at {f1(e['snap_wj'][0], 1)} m/s3")
+  else:
+    bp = 'no stopping snap to explain a bump'
+  lines.append(f"  So (end of the stop): {roll}; {bp}.")
+  short = (f"BL end n={n} roll={v}: tail{e['tail_n']}/{n}"
+           + (f" {f1(e['tail_dur'][0], 1)}s {f1(e['tail_v0'][0], 1)}>{f1(e['tail_v1'][0], 1)}mph {f1(e['tail_dist'][0], 1)}m"
+              f" ask{f1(e['tail_ask'][0], 2)}" if e['tail_n'] else '')
+           + f"; tskrel{e['rel']}/{n}" + ('' if e['hms_n'] else '(noACC_07)')
+           + (f" lat-ss{f1p(e['rel_lat_ss'][0], 2)} {f1(e['rel_dur'][0], 2)}s tsk{f1p(e['rel_tsk'][0], 1)} whl{f1p(e['rel_whl'][0], 2)}"
+              f" dv{f1(e['rel_dv'][0], 1)}mph {f1(e['rel_dist'][0], 2)}m" if e['rel'] else '')
+           + (f" +cr{e['rel_creep']}" if e['rel_creep'] else '')
+           + f"; bump=snap{e['snap']}/{n}"
+           + (f" {f1(e['snap_from'][0], 2)}>{f1(e['snap_to'][0], 2)} {f1(e['snap_t'][0], 2)}s {f1(e['snap_rate'][0], 1)}m/s3"
+              if e['snap'] else '')
+           + f" wj{f1(e['snap_wj'][0], 1)}/{f1(e['snap_wj'][1], 1)} wmin{f1(e['snap_wmin'][0], 2)}")
+  return lines, short
+
+
 # ============================================================================================ detail
+def end_detail(s):
+  """The detail lines on the end of a stop (D in the header)."""
+  out = []
+  src = {'ann': 'the early announcement', 'par': 'the parent state machine', 'oth': 'another way'}
+  if isnum(s['lat_t']):
+    def rel(x, what):
+      return f"{abs(x):.2f} s {'before' if x < 0 else 'after'} {what}" if isnum(x) else f'(no {what})'
+    out.append(f"  HMS 4 latched {-s['lat_t']:.2f} s before the stop by {src.get(s['lat_src'], '?')}, {rel(s['lat_ss'], 'shouldStop')} and"
+               f" {rel(s['lat_stp'], 'pid -> stopping')}")
+  elif s['has_hms']:
+    out.append('  no HMS change to 4 before the stop')
+  if s['win_dur'] > 0:
+    end = {'anh': 'ACC_06 Anhalten came', 'stp': 'the stopping state took over', 'stop': 'the car stopped',
+           'hms': 'HMS left 4', 'ask': 'openpilot stopped asking to brake'}.get(s['win_end'], '?')
+    dv = s['win_dv']
+    out.append(f"  HMS 4 window{' (with ACC_06 Anhalten on)' if s['win_anh'] else ''}: from {-s['win_t']:.2f} s before the stop for"
+               f" {s['win_dur']:.2f} s until {end}, openpilot asking {f1(s['win_ask'], 2)}: the TSK target peaked at {f1p(s['win_tsk'], 1)},"
+               f" the wheels at {f1p(s['win_whl'], 2)} m/s2, "
+               + (f"the car SPED UP by {mph(dv):.1f} mph ({mph(s['win_vlo']):.1f} > {mph(s['win_vhi']):.1f})"
+                  if isnum(dv) and dv * MPH >= 0.05 else 'the car did not speed up')
+               + f", rolled {f1(s['win_dist'], 2)} m" + (' -> tsk-release' if s['tsk_rel'] else ''))
+  if s['tsk_rel'] and not s['rel_in']:
+    out.append(f"  tsk-release ({s['rel_by']}) {-s['rel_t']:.2f} s before the stop, outside the window above")
+  elif s['tsk_rel'] and not s['win_dur'] > 0:
+    out.append(f"  tsk-release ({s['rel_by']}) {-s['rel_t']:.2f} s before the stop")
+  if isnum(s['tail_t']):
+    out.append(f"  planner tail: the request stayed weaker than -0.6 for the last {s['tail_dur']:.1f} s before the stopping state"
+               f" ({s['tail_tot']:.1f} s in all after the peak), from {f1(mph(s['tail_v0']), 1)} to {f1(mph(s['tail_v1']), 1)} mph,"
+               f" {f1(s['tail_dist'], 1)} m, asking {f1(s['tail_ask'], 2)}")
+  if isnum(s['snap_from']):
+    out.append(f"  stopping snap: " + (f"{s['snap_from']:.2f} > {f1(s['snap_to'], 2)} in {f1(s['snap_t'], 2)} s"
+                                       f" ({f1(s['snap_rate'], 1)} m/s3)" if s['snap'] else
+                                       f"none (handed over at {s['snap_from']:.2f}, kept)")
+               + f"; the wheels then built up at {f1(s['snap_wj'], 1)} m/s3 to {f1(s['snap_wmin'], 2)}"
+               f" {f1(s['snap_wmin_t'], 2)} s after it")
+  return out
+
+
 def print_detail(e):
   W = e['W']
   say()
@@ -1679,6 +2061,8 @@ def print_detail(e):
         + (f"; driver braked {-s['drv']:.1f} s before at {mph(s['drv_v']):.0f} mph" if s['drv'] == s['drv'] else ''))
     say(f"  ACC_07 HMS: {hms_txt(s, sep=', ')}; ACC_07 Anhalten {f1(s['a07s'], 2)}, ACC_06 Anhalten {f1(s['a06s'], 2)},"
         f" ESP_21 hold {f1(s['h53'], 2)}, bit 63 {f1(s['e63'], 2)} s from the stop")
+    for ln in end_detail(s):
+      say(ln)
     t_ref = s['t']
     a, b = max(W.G[0], t_ref - SHAPE_S), t_ref + 2.0
     fine = (t_ref - 4.0, t_ref + 2.0)
@@ -1727,7 +2111,8 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
            f"(creep{n_creep}) presses={len(presses)}(+{sum(r['n_stand'] for r in R)}standstill)"
            " labels sm=smooth lh=late-hard rg=hard-release-grab is=hard-into-stopping he=hard-eased cr=creep;"
            " classes tl=lead-too-little lt=lead-late/tight nl=no-lead acc=OP-accel es=end-of-stop(<5mph) cr=creep ot=other;"
-           " m/s2, mph, s"
+           " +R=tsk-release; h4=HMS4 latch src@t/vs-ss/vs-stp win=HMS4-window t/s/tsk/whl/+mph/m/end tail=s@mph>mph/m/ask"
+           " snap=from>to/s/m/s3 wj=whl-jerk/min; m/s2, mph, s"
            " from the stop/press"]
   shown_r = R if len(R) <= 6 else R[:3] + R[-2:]
   for r in shown_r:
@@ -1752,6 +2137,21 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
                  f" gap={f1(g['gap'][0], 1)}/{f1(g['gap'][1], 1)} roll={g['n_roll']} set={f1(g['set'], 0)}"
                  f" top>25/30/35={g['top'][25]}/{g['top'][30]}/{g['top'][35]}"
                  f" t>25/30/35={'/'.join(f1(g['above'][m] * 100, 0) for m in (25, 30, 35))}% blk={g['blk_after']}/{g['blk_rest']}")
+    e = g['end']
+    if len(groups) <= 4 and e['n']:
+      lines.append(f"E {g['name']} n={e['n']} h4={e['lat']}(" + ','.join(f'{k}{v}' for k, v in e['src'].items())
+                   + f") first-ss={e['first_ss']} first-stp={e['first_stp']} lat-ss={f1(e['lat_ss'][0], 2)}/{f1(e['lat_ss'][1], 2)}"
+                   f" lat-stp={f1(e['lat_stp'][0], 2)}/{f1(e['lat_stp'][1], 2)} win={e['win']}:{f1(e['win_dur'][0], 2)}/{f1(e['win_dur'][1], 2)}s"
+                   f" rel={e['rel']}(cr{e['rel_creep']}) tsk={f1p(e['rel_tsk'][0], 1)}/{f1p(e['rel_tsk'][1], 1)}"
+                   f" whl={f1p(e['rel_whl'][0], 2)}/{f1p(e['rel_whl'][1], 2)} dv={f1(e['rel_dv'][0], 1)}/{f1(e['rel_dv'][1], 1)}mph"
+                   f" d={f1(e['rel_dist'][0], 2)}/{f1(e['rel_dist'][1], 2)}m tail={e['tail_n']}/{e['tail_of']}:"
+                   f"{f1(e['tail_dur'][0], 1)}/{f1(e['tail_dur'][1], 1)}s@{f1(e['tail_v0'][0], 1)}>{f1(e['tail_v1'][0], 1)}mph"
+                   f"/{f1(e['tail_dist'][0], 1)}/{f1(e['tail_dist'][1], 1)}m ask={f1(e['tail_ask'][0], 2)}"
+                   f" snap={e['snap']}/{e['snap_of']}:{f1(e['snap_from'][0], 2)}>{f1(e['snap_to'][0], 2)}/{f1(e['snap_t'][0], 2)}s"
+                   f"/{f1(e['snap_rate'][0], 1)} wj={f1(e['snap_wj'][0], 1)}/{f1(e['snap_wj'][1], 1)}"
+                   f" wmin={f1(e['snap_wmin'][0], 2)}/{f1(e['snap_wmin'][1], 2)}")
+  if stops:
+    lines.append(end_story(end_stats([s for s in stops if in_numbers(s)], stops))[1])
   xl = []
   for c in blk_rest[:2]:
     xl.append(f"X {c['rid']} {c['clock']} n={','.join(f'{k}:{v}' for k, v in c['n'].items())} acc={f1(min(c['vals']), 2)}"
@@ -1776,8 +2176,8 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
   pr = sorted(presses, key=lambda p: (CLASSES.index(p['cls']) if p['cls'] in CLASSES else 9, p['t']))
   n_p = min(len(pr), max(room * 3 // 5, room - len([s for s in stops if not s['creep']])))
   sel_p = sorted(pr[:n_p], key=lambda p: p['n'])
-  cand = sorted([s for s in stops if not s['creep']], key=lambda s: (-LABEL_RANK.get(s['label_op'], 0), -abs(s['fin_whl'])
-                                                                     if s['fin_whl'] == s['fin_whl'] else 0))
+  cand = sorted([s for s in stops if not s['creep']], key=lambda s: (-int(s['tsk_rel']), -LABEL_RANK.get(s['label_op'], 0),
+                                                                     -abs(s['fin_whl']) if s['fin_whl'] == s['fin_whl'] else 0))
   sel_s = sorted(cand[:room - len(sel_p)], key=lambda s: s['n'])
   ev = sorted(sel_s + sel_p, key=lambda e: e['n'])
   more = (len(cand) - len(sel_s)) + (len(presses) - len(sel_p))     # (room already leaves a line for this)
@@ -1786,7 +2186,8 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
       s, op = e, e['op']
       ld = s['lead_brk']
       lines.append(f"S{s['n']} {s['rid']} {s['clock']} {LABEL_SHORT.get(s['label_op'], '?')}/{LABEL_SHORT.get(s['label_car'], '?')}"
-                   f" set={set_txt(s)} top={f1(mph(s['top']), 0)} brk={f1(mph(s['v_brk']), 0)}@{f1(s['t_brk'], 1)}"
+                   + ('+R' if s['tsk_rel'] else '')
+                   + f" set={set_txt(s)} top={f1(mph(s['top']), 0)} brk={f1(mph(s['v_brk']), 0)}@{f1(s['t_brk'], 1)}"
                    + (f" L{ld['d']:.0f}/{mph(ld['vl']):.0f}/{f1(ld['ttc'], 1) if ld['ttc'] < 99 else '-'}r{ld['room']:+.0f}" if ld else ' L-')
                    + f" mean={f1(s['mean_decel'], 2)} pk={f1(op['peak'], 2)}@{f1(mph(op['v_peak']), 0)}/{f1(op['t_peak'], 1)}"
                    f" whl={f1(s['car']['peak'], 2)} j={f1(op['jerk'], 0)} rel={f1(op['rel_depth'], 1)}/{f1(op['rel_dur'], 1)}"
@@ -1797,6 +2198,16 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
                    f" fin={f1(s['fin_out'], 1)}/{f1(s['fin_whl'], 1)} stop={f1(s['at_stop'], 1)} fj={f1(s['fin_jerk'], 0)}"
                    + (f" roll={s['roll_dur']:.1f}@{mph(s['roll_v']):.0f}" if s['roll_dur'] > 0 else '')
                    + f" gap={f1(s['gap'], 1)}" + (f" drv={f1(s['drv'], 1)}@{f1(mph(s['drv_v']), 0)}" if s['drv'] == s['drv'] else '')
+                   + (f" h4={s['lat_src']}@{f1(s['lat_t'], 2)}/{f1(s['lat_ss'], 2)}/{f1(s['lat_stp'], 2)}" if isnum(s['lat_t']) else '')
+                   + (f" win={f1(s['win_t'], 2)}/{f1(s['win_dur'], 2)}/{f1p(s['win_tsk'], 1)}/{f1p(s['win_whl'], 2)}"
+                      f"/{f1(mph(s['win_dv']), 1)}/{f1(s['win_dist'], 2)}/{s['win_end']}{'*' if s['win_anh'] else ''}"
+                      if s['win_dur'] > 0 else '')
+                   + (f" R={s['rel_by']}@{f1(s['rel_t'], 2)}" if s['tsk_rel'] else '')
+                   + ((f" tail={f1(s['tail_dur'], 1)}@{f1(mph(s['tail_v0']), 1)}>{f1(mph(s['tail_v1']), 1)}/{f1(s['tail_dist'], 1)}"
+                       f"/{f1(s['tail_ask'], 2)}" if s['tail_dur'] > 0 else ' tail=0') if isnum(s['tail_t']) else '')
+                   + (f" snap={f1(s['snap_from'], 2)}>{f1(s['snap_to'], 2)}/{f1(s['snap_t'], 2)}/{f1(s['snap_rate'], 1)}"
+                      if s['snap'] else '')
+                   + (f" wj={f1(s['snap_wj'], 1)}/{f1(s['snap_wmin'], 2)}" if isnum(s['snap_wj']) else '')
                    + (f" [{stop_flags(s)}]" if stop_flags(s) else ''))
     else:
       p = e
@@ -1810,7 +2221,7 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
                    + (f" stop={f1(p['stop_in'], 1)}{p['stop_by'][:3]} max={f1(p['after_min'], 1)}" if p['stop_in'] == p['stop_in']
                       else ' nostop') + (' [q]' if p['q'] else ''))
   if more > 0:
-    lines.append(f'... {more} more events not shown (presses first, then the hardest stops)')
+    lines.append(f'... {more} more events not shown (presses first, then tsk-release and the hardest stops)')
   lines += xl
   lines += ['note: ' + n for n in nl]
   for ln in lines[:PASTE_MAX]:
@@ -1959,6 +2370,8 @@ def report(ctx):
     print_stops(stops)
     say()
     print_stop_signals(stops)
+    say()
+    print_stop_end(stops)
   else:
     say('No stop by openpilot in these drives.')
   say()
