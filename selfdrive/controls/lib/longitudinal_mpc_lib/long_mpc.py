@@ -164,7 +164,7 @@ def stop_gap_shift(v_lead_traj, extra):
 
 # Highway follow: a shorter time gap at highway speed. Behind a lead the MPC settles at
 # t_follow * v + 6 m (aggressive 1.25 s: 42 m at 65 mph, 56 m at 90 mph); the close follow above cannot
-# shorten that, its floor is above the wanted gap from about 25 mph up. From HF full speed (default
+# shorten that, its floor is above the wanted gap from about 30 mph up (aggressive; 35 standard, 44 relaxed). From HF full speed (default
 # 45 mph) up, with no upper limit, t_follow is lowered to the time gap in the file, blended in over the
 # HF_BAND_MPH below the full speed (none at 35 mph, full at 45 mph by default) so crossing the band does not
 # step the wanted gap. The cut is slewed like the close follow (HF_TF_IN per update shorter, HF_TF_OUT per
@@ -177,12 +177,15 @@ def stop_gap_shift(v_lead_traj, extra):
 # No file, 0, or an unreadable file = off = the behaviour without this feature, exactly.
 # The time gap is clamped to HF_T_LIMITS: the floor is what a lead braking as hard as this car can
 # (-3.5 m/s2, the panda limit) still leaves room for after a 0.5 s reaction at 90 mph (0.5 s headway in all,
-# 0.35 s + 6 m), rounded up to 0.5 s for the delays of the camera lead, the planner and the car. The full
-# speed is clamped to HF_V_LIMITS; its floor keeps the band above the close follow.
+# 0.35 s + 6 m), rounded up to 0.5 s for the delays of the camera lead, the planner and the car. In the closed-loop
+# simulation of this branch the stack takes 3-4 s to reach full braking, so what it absorbs on its own is far less
+# (0.5 s: a lead braking ~1.5 m/s2 at 65 mph, ~1 at 90; 0.8: ~2.5 / 2.25; today's 1.25: ~3): the driver covers the
+# rest, as under the gas override today. The full speed is clamped to HF_V_LIMITS; its floor (35 mph: the band is
+# 25-35 mph at the lowest) keeps the cut out of the close follow / stop-and-go speeds, where it was not simulated.
 HF_DEFAULT = (0.0, 45.0)
 HF_FILE = '/data/highway_follow'
 HF_T_LIMITS = (0.5, 1.75)    # s: time gap
-HF_V_LIMITS = (25.0, 90.0)   # mph: full speed
+HF_V_LIMITS = (35.0, 90.0)   # mph: full speed
 HF_BAND_MPH = 10.0           # mph below the full speed over which the cut blends in
 HF_TF_IN = CF_TF_IN          # s per update shorter
 HF_TF_OUT = CF_TF_OUT        # s per update back
