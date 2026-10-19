@@ -4,6 +4,7 @@ import time
 import numpy as np
 from cereal import log
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
@@ -161,6 +162,51 @@ def stop_gap_shift(v_lead_traj, extra):
   return extra * np.interp(v_lead_traj, SG_LEAD_V, [1., 0.])
 
 
+# Highway follow: a shorter time gap at highway speed. Behind a lead the MPC settles at
+# t_follow * v + 6 m (aggressive 1.25 s: 42 m at 65 mph, 56 m at 90 mph); the close follow above cannot
+# shorten that, its floor is above the wanted gap from about 25 mph up. From HF full speed (default
+# 45 mph) up, with no upper limit, t_follow is lowered to the time gap in the file, blended in over the
+# HF_BAND_MPH below the full speed (none at 35 mph, full at 45 mph by default) so crossing the band does not
+# step the wanted gap. The cut is slewed like the close follow (HF_TF_IN per update shorter, HF_TF_OUT per
+# update back), so neither the band nor a change of the file jumps the request. It is applied after the
+# close follow and before the cruise fake obstacle, which uses the same t_follow, so the set speed is kept
+# as before. The approach term (v_ego^2 - v_lead^2) / 5 is compiled into the solver and does not change.
+# While the cut is active the stopped phantom of a lead that drops out (process_lead) is not used: the gap
+# can then be under its 25 m at highway speed, and a stopped car there is a brake stab, not a stand-in.
+# Live: /data/highway_follow holds "<time gap s> [<full speed mph>]" (e.g. "0.8" or "0.8 45").
+# No file, 0, or an unreadable file = off = the behaviour without this feature, exactly.
+# The time gap is clamped to HF_T_LIMITS: the floor is what a lead braking as hard as this car can
+# (-3.5 m/s2, the panda limit) still leaves room for after a 0.5 s reaction at 90 mph (0.5 s headway in all,
+# 0.35 s + 6 m), rounded up to 0.5 s for the delays of the camera lead, the planner and the car. The full
+# speed is clamped to HF_V_LIMITS; its floor keeps the band above the close follow.
+HF_DEFAULT = (0.0, 45.0)
+HF_FILE = '/data/highway_follow'
+HF_T_LIMITS = (0.5, 1.75)    # s: time gap
+HF_V_LIMITS = (25.0, 90.0)   # mph: full speed
+HF_BAND_MPH = 10.0           # mph below the full speed over which the cut blends in
+HF_TF_IN = CF_TF_IN          # s per update shorter
+HF_TF_OUT = CF_TF_OUT        # s per update back
+HF_FILE_PERIOD = 20          # updates between file reads (1 s)
+
+
+def read_highway_follow():
+  try:
+    with open(HF_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return HF_DEFAULT
+  if len(vals) not in (1, 2) or not all(np.isfinite(v) for v in vals) or vals[0] <= 0.0:
+    return HF_DEFAULT
+  v_full = float(np.clip(vals[1], *HF_V_LIMITS)) if len(vals) == 2 else HF_DEFAULT[1]
+  return float(np.clip(vals[0], *HF_T_LIMITS)), v_full
+
+
+def highway_follow_weight(v_ego, v_full_mph):
+  # 0..1 share of the highway follow cut at this speed (see HF_* above)
+  v_full = v_full_mph * CV.MPH_TO_MS
+  return float(np.interp(v_ego, [v_full - HF_BAND_MPH * CV.MPH_TO_MS, v_full], [0., 1.]))
+
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -305,6 +351,9 @@ class LongitudinalMpc:
     self._sg_target = SG_DEFAULT
     self._sg = None
     self._sg_cnt = 0
+    self._hf = HF_DEFAULT
+    self._hf_cnt = 0
+    self._hf_cut = 0.0
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -406,7 +455,11 @@ class LongitudinalMpc:
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
       self._lead_dropout_frames[idx] += 1
-      if self._last_dRel[idx] < 25.0 and v_ego > 1.0 and self._lead_dropout_frames[idx] <= 10:
+      # Highway follow: with its cut active the gap can be under 25 m at highway speed, where a stopped phantom
+      # (clipped to v_ego^2/14 ahead) would be a brake stab (-3.5 m/s2 for the 0.5 s of a camera dropout at 65 mph in
+      # the sim). Today's gap is only under 25 m below about 33 mph, so with the cut at 0 nothing changes.
+      if (self._last_dRel[idx] < 25.0 and v_ego > 1.0 and self._lead_dropout_frames[idx] <= 10 and
+              self._hf_cut == 0.0):
         phantom = True
         x_lead = self._last_dRel[idx]
         v_lead = 0.0
@@ -452,6 +505,17 @@ class LongitudinalMpc:
       self._cf_tf = t_follow
     self._cf_tf = min(self._cf_tf + float(np.clip(tf_target - self._cf_tf, -CF_TF_IN, CF_TF_OUT)), t_follow)
     t_follow = self._cf_tf
+
+    # highway follow (see HF_* above): a cut of t_follow, slewed, never below the file's time gap
+    if self._hf_cnt % HF_FILE_PERIOD == 0:
+      self._hf = read_highway_follow()
+    self._hf_cnt += 1
+    hf_t, hf_v = self._hf
+    hf_on = hf_t > 0.0
+    hf_cut_target = max(t_follow - hf_t, 0.0) * highway_follow_weight(v_ego, hf_v) if hf_on else 0.0
+    hf_cut_max = max(t_follow - (hf_t if hf_on else HF_T_LIMITS[0]), 0.0)   # a personality change cannot undercut it
+    self._hf_cut = min(self._hf_cut + float(np.clip(hf_cut_target - self._hf_cut, -HF_TF_OUT, HF_TF_IN)), hf_cut_max)
+    t_follow = t_follow - self._hf_cut
 
     # standstill gap (see SG_* above)
     if self._sg_cnt % SG_FILE_PERIOD == 0:
