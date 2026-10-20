@@ -132,18 +132,33 @@ def close_follow_weight(lead, v_ego, t_follow, cut_full):
   return w if np.isfinite(w) else 0.0  # a NaN / inf vLead must not latch _cf_shift and _cf_tf at NaN
 
 
-# Standstill gap: stop farther back behind a stopped car without changing the following gap.
+# Standstill gap: stop farther back behind a stopped car, the following gap from 25 mph up unchanged.
 # Where the lead is predicted to be (nearly) stopped along the MPC horizon (full at 0.5 m/s or
 # less, none at 1.5 m/s or more), its obstacle is moved back by the extra metres, so the MPC
-# plans the stop that much earlier and holds it there. A moving lead is untouched, so the
-# following distance does not change. When the lead pulls away the extra goes with it.
-# Live: /data/stop_gap holds the extra metres (default 1.5; 0 = off; clamped 0-3).
-SG_DEFAULT = 1.5
+# plans the stop that much earlier and holds it there. Alone that gave the full extra only when
+# driving up to a car already stopped: behind a lead braking to a stop the camera lead's predicted
+# speed gets under 1.5 m/s only in the last 1-2 s, the MPC cannot take that late jump back without
+# braking harder at the end, and the car stopped only a third to two thirds of the extra farther
+# back (closed-loop sim, camera lead). So the extra is also applied to the WHOLE horizon, by a share
+# that is full while this car is at 15 mph or less (none at 25 mph) and the lead is not pulling away
+# (full while it is less than 1 m/s faster than this car, none at 3 m/s faster), or while the lead
+# brakes toward a stop (vLead + aLeadK * 5 s under the 0.5 .. 1.5 m/s above). The share comes in
+# over 1 s and goes in 0.2 s. A stop then is the stop without the extra moved back by it: the same
+# braking at the end, the full extra at the stop. The following gap at 15 mph and under is the
+# extra longer (20 mph: half). A lead pulling away takes the share away at once and the per-step
+# shift as before, so the pull-away is unchanged.
+# Live: /data/stop_gap holds the extra metres (default 2.0; 0 = off, as before this feature; clamped 0-3).
+SG_DEFAULT = 2.0
 SG_FILE = '/data/stop_gap'
 SG_LIMITS = (0.0, 3.0)
 SG_LEAD_V = [0.5, 1.5]       # m/s predicted lead speed: full .. none
 SG_SLEW = 0.05               # m per update when the setting changes
 SG_FILE_PERIOD = 20          # updates between file reads (1 s)
+SG_EGO_V = [15 * CV.MPH_TO_MS, 25 * CV.MPH_TO_MS]  # this car's speed: whole-horizon share full .. none
+SG_PULL_V = [1.0, 3.0]       # m/s lead speed minus this car's: share kept .. none (the lead pulls away)
+SG_STOP_T = 5.0              # s: a braking lead counts as stopping when vLead + aLeadK * this is under SG_LEAD_V
+SG_U_IN = 0.05               # share per update toward the whole horizon (full in 1 s)
+SG_U_OUT = 0.25              # share per update back (0.2 s)
 
 
 def read_stop_gap():
@@ -157,9 +172,17 @@ def read_stop_gap():
   return float(np.clip(vals[0], *SG_LIMITS))
 
 
-def stop_gap_shift(v_lead_traj, extra):
+def stop_gap_shift(v_lead_traj, extra, share=0.0):
   # metres to move a lead obstacle back at each horizon step (see SG_* above)
-  return extra * np.interp(v_lead_traj, SG_LEAD_V, [1., 0.])
+  return extra * np.maximum(np.interp(v_lead_traj, SG_LEAD_V, [1., 0.]), share)
+
+
+def stop_gap_share(v_ego, v_lead, a_lead):
+  # 0..1 share of the stop gap applied to the whole horizon behind this lead (see SG_* above)
+  slow = np.interp(v_ego, SG_EGO_V, [1., 0.]) * np.interp(v_lead - v_ego, SG_PULL_V, [1., 0.])
+  stopping = np.interp(max(v_lead + min(a_lead, 0.0) * SG_STOP_T, 0.0), SG_LEAD_V, [1., 0.])
+  u = float(max(slow, stopping))
+  return u if np.isfinite(u) else 0.0  # a NaN / inf lead must not latch the slewed share at NaN
 
 
 # Highway follow: a shorter time gap at highway speed. Behind a lead the MPC settles at
@@ -394,6 +417,8 @@ class LongitudinalMpc:
     self._last_vLead = [0.0, 0.0]           # per lead: last real vLead (stop gap of a dropout phantom)
     self._sg_v = [np.zeros(N+1), np.zeros(N+1)]  # per lead: speed(s) the stop gap is taken from
     self._lead_dropout_frames = [0, 0]
+    self._sg_share = [0.0, 0.0]             # per lead: whole-horizon share of the stop gap (slewed)
+    self._sg_share_target = [0.0, 0.0]
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -484,6 +509,8 @@ class LongitudinalMpc:
     # Stop gap: the phantom is a stopped car only as a stand-in for a lead that flickered out, so it gets
     # the stop gap of that lead (full if it was stopped, none if it was moving), not the full stop gap.
     self._sg_v[idx] = self._last_vLead[idx] if phantom else lead_xv[:, 1]
+    self._sg_share_target[idx] = (float(np.interp(self._last_vLead[idx], SG_LEAD_V, [1., 0.])) if phantom else
+                                  stop_gap_share(v_ego, v_lead, a_lead))
     return lead_xv
 
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
@@ -531,14 +558,16 @@ class LongitudinalMpc:
 
     lead_xv_0 = self.process_lead(radarstate.leadOne, 0)
     lead_xv_1 = self.process_lead(radarstate.leadTwo, 1)
+    for i in (0, 1):
+      self._sg_share[i] += float(np.clip(self._sg_share_target[i] - self._sg_share[i], -SG_U_OUT, SG_U_IN))
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = (lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift -
-                       stop_gap_shift(self._sg_v[0], self._sg))
+                       stop_gap_shift(self._sg_v[0], self._sg, self._sg_share[0]))
     lead_1_obstacle = (lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift -
-                       stop_gap_shift(self._sg_v[1], self._sg))
+                       stop_gap_shift(self._sg_v[1], self._sg, self._sg_share[1]))
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
