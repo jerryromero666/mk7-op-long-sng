@@ -49,6 +49,132 @@ def limit_accel_in_turns(v_ego, angle_steers, a_target, CP, a_total_min=0.0):
   return [a_target[0], min(a_target[1], a_x_allowed)]
 
 
+# Stop placement (with the stop distance, long_mpc.py SD_*; off with /data/stop_gap "0"). The stock stop is declared
+# where the PLAN's own speed drops under vEgoStopping. In a crawl or a slow queue the plan's speed (the MPC starts
+# from a 2 s filtered vEgo, and the VW long control has no speed feedback) runs ahead of the car, so the stop was
+# declared up to 2 m before the spot the plan aimed for, and the car stayed there; under 0.9 m/s the VW carcontroller
+# also announces the stop while openpilot still brakes without the stopping state (HMS 4 latched without ACC_06
+# Anhalten), the state in which the TSK lets go and the car pushes. Here, under ST_V_MAX:
+#  - the stop is declared where the plan wants the car to stop: once the plan's remaining travel to its rest point
+#    (MPC x_sol / v_solution) is no more than this car needs to stop (ST_T_LAG s + a stop at ST_A_STOP) + ST_TOL,
+#    and held off while more is left (a plan braking harder than ST_A_PASS is never held off);
+#  - while held off and slower than ST_V_ANN (above the VW announcement speed) the request is not negative, so the
+#    stop is announced together with the stopping state (ACC_06 Anhalten), not before it; a car crawling slower than
+#    the plan catches up gently (ST_CREEP_*);
+#  - in the stopping state the request carries the decel that stops the car at the plan's rest point (never stronger
+#    than ST_A_DIST_MAX: anything stronger is the plan's own request) for longcontrol's soft stop;
+#  - at a standstill the car does not move off for a plan that wants less than ST_GO_TRAVEL (camera noise: stop,
+#    creep, stop); a lead moving off makes the plan stop farther away or not at all, and the car goes as before.
+ST_V_MAX = 2.0        # m/s: above this, stock
+ST_V_EARLY = 1.2      # m/s: the stop may be declared under this
+ST_V_ANN = 1.0        # m/s: above the VW stop announcement speed (carcontroller ANNOUNCE_SPEED 0.9)
+ST_A_PASS = -0.6      # m/s2: a plan braking harder than this is never held off
+ST_T_LAG = 0.5        # s: actuator lag + soft-stop ramp
+ST_A_STOP = 0.6       # m/s2: the soft stop
+ST_TOL = 0.3          # m
+ST_V_REST = 0.2       # m/s: plan speed that counts as at rest (the MPC creeps the last centimetres slowly)
+ST_D_MIN = 0.15       # m
+ST_A_DIST_MAX = 0.95  # m/s2
+ST_AWAY_N = 10        # updates (0.5 s): a plan that does not stop for this long drops the stop (lead moved off)
+ST_CREEP_DV = 0.1     # m/s
+ST_CREEP_TAU = 1.0    # s
+ST_CREEP_A = 0.3      # m/s2
+ST_GO_TRAVEL = 1.0    # m
+ST_GO_AWAY_N = 2      # updates (0.1 s): at a standstill a plan no longer at rest, or a lead faster than ST_V_LEAD,
+                      # for this long lets the car go
+ST_V_LEAD = 0.5       # m/s: the stop is declared early (before the plan's speed is under vEgoStopping) only behind a
+                      # lead this slow (a stopped car), never for a crawling queue that only slows down
+ST_ROOM = 1.0         # m: a car ahead closer than this + what this car needs to stop at ST_A_DIST_MAX (its own stop
+                      # at ST_A_LEAD counted as room) -- a cut-in, an overrun -- ends the cap: the stop is declared at once
+                      # and asks the decel that stops the car ST_ROOM behind it (no cap, no easing); from longcontrol's
+                      # SOFT_URGENT on that is the stock firm stopping ramp
+ST_A_LEAD = 2.0       # m/s2
+ST_A_URGENT = -1.2    # m/s2: a plan braking harder than this (more than the stopping state's stopAccel) stays in pid (no
+                      # stopping state), so its request goes through
+
+
+def plan_stop_travel(x_sol, v_sol):
+  """metres the plan travels before it is at rest (inf if it is not at rest within the horizon)"""
+  idx = np.nonzero(v_sol < ST_V_REST)[0]
+  if not len(idx):
+    return float('inf')
+  i = int(idx[0])
+  if i == 0:
+    return 0.0
+  v0, v1 = v_sol[i - 1], v_sol[i]
+  f = (v0 - ST_V_REST) / max(v0 - v1, 1e-6)
+  return float(x_sol[i - 1] + f * (x_sol[i] - x_sol[i - 1]))
+
+
+class StopPlace:
+  def __init__(self):
+    self.declared = False
+    self.away = 0                 # updates in a row the plan was not at rest within the horizon
+    self.lead_go = 0              # updates in a row the lead was faster than ST_V_LEAD (at a standstill)
+    self.travel = float('inf')
+    self.d_prev = float('inf')    # last update's lead distance (ST_ROOM needs two close readings in a row)
+
+  def reset(self):
+    self.declared = False
+    self.away = 0
+    self.lead_go = 0
+    self.travel = float('inf')
+    self.d_prev = float('inf')
+
+  def update(self, a_target, should_stop, v_ego, travel, v_plan, CP, v_lead=0.0, d_lead=float('inf')):
+    """(a_target, should_stop) from get_accel_from_plan -> placed ones. travel = plan_stop_travel(), v_plan = the
+    plan's speed at action_t. Call once per planner update while it is on."""
+    d_close, self.d_prev = max(d_lead, self.d_prev), d_lead
+    if v_ego > ST_V_MAX:
+      self.reset()
+      return a_target, should_stop
+    # the plan's rest point, kept through short flickers of a plan that does not stop (camera lead speed noise)
+    self.away = 0 if np.isfinite(travel) else self.away + 1
+    if np.isfinite(travel):
+      self.travel = float(travel)
+    elif self.away >= ST_AWAY_N:
+      self.travel = float('inf')
+    travel = self.travel
+    approaching = np.isfinite(travel)
+    if v_ego <= CP.vEgoStarting:
+      self.declared = False
+      self.lead_go = self.lead_go + 1 if v_lead >= ST_V_LEAD else 0
+      if not should_stop and self.away < ST_GO_AWAY_N and travel < ST_GO_TRAVEL and self.lead_go < ST_GO_AWAY_N:
+        should_stop = True
+      return a_target, should_stop
+    d_car = v_ego * ST_T_LAG + v_ego**2 / (2 * ST_A_STOP)
+    if self.declared and not approaching:
+      self.declared = False
+    if not self.declared:
+      if approaching and v_ego < ST_V_EARLY and travel <= d_car + ST_TOL and a_target < 0.1 and v_lead < ST_V_LEAD:
+        self.declared = True
+      elif should_stop and approaching and travel > d_car + ST_TOL and a_target >= ST_A_PASS:
+        should_stop = False
+      elif should_stop:
+        self.declared = True
+    if self.declared:
+      should_stop = True
+      d_eff = max(travel - v_ego * ST_T_LAG, ST_D_MIN)
+      a_target = min(a_target, -min(v_ego**2 / (2 * d_eff), ST_A_DIST_MAX))
+    elif approaching and ST_A_PASS <= a_target < 0.1:
+      if v_ego < ST_V_ANN:
+        a_target = max(a_target, 0.0)
+      if v_ego < v_plan - ST_CREEP_DV:
+        a_target = max(a_target, min((v_plan - v_ego) / ST_CREEP_TAU, ST_CREEP_A))
+    # a car this close: no hold-off, no cap, no easing (see ST_ROOM)
+    room = d_close + max(v_lead, 0.0)**2 / (2 * ST_A_LEAD) - ST_ROOM - v_ego * ST_T_LAG
+    if v_ego**2 / (2 * max(room, 0.05)) > ST_A_DIST_MAX:
+      if a_target < ST_A_URGENT:
+        # the plan brakes harder than the stopping state can (it holds at most stopAccel): leave it to pid
+        self.declared = False
+        should_stop = False
+      else:
+        self.declared = True
+        should_stop = True
+        a_target = min(a_target, -min(v_ego**2 / (2 * max(room, 0.05)), 3.5))
+    return a_target, should_stop
+
+
 class LongitudinalPlanner(LongitudinalPlannerSP):
   def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
@@ -58,6 +184,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.dt = dt
     self.launch_boost = LaunchBoost(dt)
     self.pickup_accel = PickupAccel()
+    self.stop_place = StopPlace()
     self.allow_throttle = True
 
     self.a_desired = init_a
@@ -179,6 +306,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       output_a_target_mpc = max(output_a_target_mpc, launch_boost)
       output_should_stop_mpc = False
       self.a_desired = max(self.a_desired, launch_boost)
+    # Stop placement (see ST_* above), with the stop distance of long_mpc.py (off with /data/stop_gap "0")
+    if self.mpc.stop_distance_on and not reset_state and launch_boost <= 0.0:
+      travel = plan_stop_travel(self.mpc.x_sol[:, 0], self.mpc.v_solution)
+      v_plan = float(np.interp(action_t, CONTROL_N_T_IDX, self.v_desired_trajectory))
+      l1 = sm['radarState'].leadOne
+      v_lead = float(l1.vLead) if (l1.status and np.isfinite(l1.vLead)) else 0.0
+      d_lead = float(l1.dRel) if (l1.status and np.isfinite(l1.dRel)) else float('inf')
+      output_a_target_mpc, output_should_stop_mpc = self.stop_place.update(output_a_target_mpc, output_should_stop_mpc,
+                                                                           v_ego, travel, v_plan, self.CP, v_lead, d_lead)
+    else:
+      self.stop_place.reset()
     if self.launch_boost.mpc_behind(self.v_desired_filter.x, v_ego):
       self.v_desired_filter.x = v_ego
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration

@@ -132,34 +132,58 @@ def close_follow_weight(lead, v_ego, t_follow, cut_full):
   return w if np.isfinite(w) else 0.0  # a NaN / inf vLead must not latch _cf_shift and _cf_tf at NaN
 
 
-# Standstill gap: stop farther back behind a stopped car without changing the following gap.
-# Where the lead is predicted to be (nearly) stopped along the MPC horizon (full at 0.5 m/s or
-# less, none at 1.5 m/s or more), its obstacle is moved back by the extra metres, so the MPC
-# plans the stop that much earlier and holds it there. A moving lead is untouched, so the
-# following distance does not change. When the lead pulls away the extra goes with it.
-# Live: /data/stop_gap holds the extra metres (default 1.5; 0 = off; clamped 0-3).
-SG_DEFAULT = 1.5
-SG_FILE = '/data/stop_gap'
-SG_LIMITS = (0.0, 3.0)
-SG_LEAD_V = [0.5, 1.5]       # m/s predicted lead speed: full .. none
-SG_SLEW = 0.05               # m per update when the setting changes
-SG_FILE_PERIOD = 20          # updates between file reads (1 s)
+# Stop distance: one standstill gap for every kind of stop. It replaces the stop gap of t2_set_min_gap /
+# t2_stop_gap2, which moved the obstacle of a lead PREDICTED to be stopped back by the extra metres. That rule
+# switched on by the camera lead's speed: late (or not at all) behind a car braking to a stop, which still stopped
+# close, and fully behind a stopped car, a crawl or a slow queue, which already stopped far back (the MPC plans the
+# whole compiled 6 m there, but only the 4.5 m danger floor behind a braking car, and the camera lag eats more).
+# Here every lead obstacle is moved by one amount that depends only on this car's speed (no lead-speed switch):
+#   at SD_V[0] and slower:  the standstill trim (aimed gap - SD_AIM_OFFSET; negative = closer than the 6 m),
+#   from SD_V[1] up:        the trim + SD_MARGIN, a margin at speed behind a car that may stop (it absorbs the
+#                           camera lag and the car's brake lag of a stop from speed),
+# blended in between, so the margin goes back to the standstill trim while the car slows through SD_V: the end of
+# a stop from speed eases instead of braking harder, and every kind of stop aims for the same spot (the planner's
+# stop placement, longitudinal_planner.py, then declares the stop there). The margin is left out while the lead
+# pulls away (SD_PULL_V: lead faster than this car), so pickups behind a departing car keep the close follow. The
+# whole shift fades out from SD_FADE_MPH[0] to SD_FADE_MPH[1]: following at speed is unchanged. It is slewed.
+# Live: /data/stop_gap holds the gap in metres the car aims to stop behind the car ahead (default 4.0, clamped
+# SD_LIMITS); no file or an unreadable file = the default; "0" (or any number <= 0) = off = no stop distance and no
+# stop placement: the stop distance of t2_set_min (and of t2_highway_follow with /data/stop_gap 0), bit for bit.
+SD_FILE = '/data/stop_gap'
+SD_DEFAULT = 4.0
+SD_LIMITS = (3.0, 7.0)        # m: aimed gap
+SD_AIM_OFFSET = 5.5           # m: the compiled 6 m stop distance less the ~0.5 m the soft stop rolls past the plan
+SD_MARGIN = 3.5               # m: added at speed
+SD_V = [1.0, 3.0]             # m/s this car's speed: standstill trim .. trim + margin
+SD_PULL_V = [1.0, 3.0]        # m/s lead speed minus this car's: margin kept .. none (the lead pulls away)
+SD_FADE_MPH = [25.0, 35.0]    # mph: full .. none
+SD_SLEW = 0.1                 # m per update
+SD_FILE_PERIOD = 20           # updates between file reads (1 s)
 
 
-def read_stop_gap():
+def read_stop_distance():
+  # aimed standstill gap in m (see SD_* above), 0.0 = off
   try:
-    with open(SG_FILE) as f:
+    with open(SD_FILE) as f:
       vals = [float(v) for v in f.read().split()]
   except (OSError, ValueError):
-    return SG_DEFAULT
+    return SD_DEFAULT
   if len(vals) != 1 or not np.isfinite(vals[0]):
-    return SG_DEFAULT
-  return float(np.clip(vals[0], *SG_LIMITS))
+    return SD_DEFAULT
+  if vals[0] <= 0.0:
+    return 0.0
+  return float(np.clip(vals[0], *SD_LIMITS))
 
 
-def stop_gap_shift(v_lead_traj, extra):
-  # metres to move a lead obstacle back at each horizon step (see SG_* above)
-  return extra * np.interp(v_lead_traj, SG_LEAD_V, [1., 0.])
+def stop_distance_shift(v_ego, aim, dv_lead):
+  # metres to move every lead obstacle back (negative = forward) at this car's speed (see SD_* above);
+  # dv_lead = leadOne's speed minus this car's (0 without a lead)
+  if aim <= 0.0:
+    return 0.0
+  margin = SD_MARGIN * float(np.interp(v_ego, SD_V, [0., 1.])) * float(np.interp(dv_lead, SD_PULL_V, [1., 0.]))
+  fade = float(np.interp(v_ego, [SD_FADE_MPH[0] * CV.MPH_TO_MS, SD_FADE_MPH[1] * CV.MPH_TO_MS], [1., 0.]))
+  shift = (aim - SD_AIM_OFFSET + margin) * fade
+  return shift if np.isfinite(shift) else 0.0
 
 
 # Highway follow: a shorter time gap at highway speed. Behind a lead the MPC settles at
@@ -351,9 +375,10 @@ class LongitudinalMpc:
     self._cf_cnt = 0
     self._cf_shift = 0.0
     self._cf_tf = None
-    self._sg_target = SG_DEFAULT
-    self._sg = None
-    self._sg_cnt = 0
+    self._sd_aim = SD_DEFAULT
+    self._sd_cnt = 0
+    self._sd = 0.0
+    self.stop_distance_on = True   # read by the planner's stop placement
     self._hf = HF_DEFAULT
     self._hf_cnt = 0
     self._hf_cut = 0.0
@@ -391,8 +416,6 @@ class LongitudinalMpc:
     self.time_integrator = 0.0
     self.x0 = np.zeros(X_DIM)
     self._last_dRel = [50.0, 50.0]          # per lead: [leadOne, leadTwo]
-    self._last_vLead = [0.0, 0.0]           # per lead: last real vLead (stop gap of a dropout phantom)
-    self._sg_v = [np.zeros(N+1), np.zeros(N+1)]  # per lead: speed(s) the stop gap is taken from
     self._lead_dropout_frames = [0, 0]
     self.set_weights()
 
@@ -439,7 +462,6 @@ class LongitudinalMpc:
     # Dropout state is per lead (idx 0 = leadOne, 1 = leadTwo). When it was shared, an absent
     # lead reused the other lead's distance and became a stopped phantom car at that spot.
     v_ego = self.x0[1]
-    phantom = False
     if lead is not None and lead.status:
       x_lead = lead.dRel
       last_dRel = self._last_dRel[idx]
@@ -453,8 +475,6 @@ class LongitudinalMpc:
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
-      if np.isfinite(v_lead):
-        self._last_vLead[idx] = max(float(v_lead), 0.0)
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
       self._lead_dropout_frames[idx] += 1
@@ -463,7 +483,6 @@ class LongitudinalMpc:
       # the sim). Today's gap is only under 25 m below about 33 mph, so with the cut at 0 nothing changes.
       if (self._last_dRel[idx] < 25.0 and v_ego > 1.0 and self._lead_dropout_frames[idx] <= 10 and
               self._hf_cut == 0.0):
-        phantom = True
         x_lead = self._last_dRel[idx]
         v_lead = 0.0
         a_lead = 0.0
@@ -481,9 +500,6 @@ class LongitudinalMpc:
     v_lead = np.clip(v_lead, 0.0, 1e8)
     a_lead = np.clip(a_lead, -10., 5.)
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
-    # Stop gap: the phantom is a stopped car only as a stand-in for a lead that flickered out, so it gets
-    # the stop gap of that lead (full if it was stopped, none if it was moving), not the full stop gap.
-    self._sg_v[idx] = self._last_vLead[idx] if phantom else lead_xv[:, 1]
     return lead_xv
 
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
@@ -520,13 +536,15 @@ class LongitudinalMpc:
     self._hf_cut = min(self._hf_cut + float(np.clip(hf_cut_target - self._hf_cut, -HF_TF_OUT, HF_TF_IN)), hf_cut_max)
     t_follow = t_follow - self._hf_cut
 
-    # standstill gap (see SG_* above)
-    if self._sg_cnt % SG_FILE_PERIOD == 0:
-      self._sg_target = read_stop_gap()
-    self._sg_cnt += 1
-    if self._sg is None:
-      self._sg = self._sg_target
-    self._sg += float(np.clip(self._sg_target - self._sg, -SG_SLEW, SG_SLEW))
+    # stop distance (see SD_* above)
+    if self._sd_cnt % SD_FILE_PERIOD == 0:
+      self._sd_aim = read_stop_distance()
+    self._sd_cnt += 1
+    self.stop_distance_on = self._sd_aim > 0.0
+    l1 = radarstate.leadOne
+    dv_lead = float(l1.vLead) - v_ego if (l1.status and np.isfinite(l1.vLead)) else 0.0
+    sd_target = stop_distance_shift(v_ego, self._sd_aim, dv_lead)
+    self._sd += float(np.clip(sd_target - self._sd, -SD_SLEW, SD_SLEW))
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
     lead_xv_0 = self.process_lead(radarstate.leadOne, 0)
@@ -535,10 +553,8 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = (lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift -
-                       stop_gap_shift(self._sg_v[0], self._sg))
-    lead_1_obstacle = (lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift -
-                       stop_gap_shift(self._sg_v[1], self._sg))
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + self._cf_shift - self._sd
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + self._cf_shift - self._sd
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
