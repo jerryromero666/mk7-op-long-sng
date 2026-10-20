@@ -14,6 +14,7 @@ RUN IT WITH THE CAR OFF:
   python3 /data/mk7_follow_check.py 00000343        a drive can also be a route-name prefix
   python3 /data/mk7_follow_check.py 0-4 --detail 7  episode 7 as a timeline (S = steady following, O = gas override, A = approach)
   python3 /data/mk7_follow_check.py 0-4 --all       every episode as a timeline
+  python3 /data/mk7_follow_check.py 0-4 --no-can    faster: no CAN (brake pressure from carState.brake, no TSK bits)
 
 The last block of the output, between "PASTE THIS TO CLAUDE (start)" and "(end)", is meant to be copied back as it is.
 
@@ -50,6 +51,27 @@ from the camera model; its modelProb is the model's lead probability, so modelV2
     panda's -3.5 m/s2 from 0.5 s after the car ahead starts braking) and what openpilot alone manages in the simulator of
     this branch (it takes 3-4 s to reach full braking, so it absorbs about half of the physics figure). The OP steady gap
     is shown as a check that the formula matches the logs.
+ F. Coast or brake (v1.2): when openpilot asks to slow down at 45+ mph, does the car put the brakes on or only lift off
+    (coast)? From CAN (the car's bus, decoded with vw_mqb.dbc): ESP_05 ESP_Bremsdruck (brake pressure, bar; the same value
+    is in carState.brake x 250, used when there is no CAN), ESP_05 ESP_Verz_TSK_aktiv (the ESP brakes for the cruise
+    control), ECD_Bremslicht and ESP_Fahrer_bremst, TSK_06 TSK_Radbremsmom (the cruise control's wheel brake torque request),
+    Motor_20 TSK_a_Soll_gradientenbegrenzt (the cruise control's target) and MO_Schubabschaltung (fuel cut). First a signal
+    check: which of them carry real values on this car (on when the driver brakes, on when openpilot asks hard braking, off
+    while accelerating). Then every 0.1 s of openpilot driving at 45+ with a request under 0, paired with what the car did
+    0.5 s later (the actuator delay; carParams' delay when logged), by request (0..-0.3, -0.3..-0.6, -0.6..-1.0, under -1.0
+    m/s2) and speed band: the share of time with the brakes on (any live signal; also pressure over 1 bar, the TSK brake
+    bit, the brake torque request each), 'beyond coast' = the car slowed 0.4 m/s2 more than it does coasting at that speed
+    (brakes by physics, whatever the signals say), the achieved deceleration (carState.aEgo), the cruise control's target.
+    And this car's COAST deceleration: aEgo with openpilot off, the gas and the brake pedal off for 1 s or more and no brake
+    signal, per band (median; hills average out over enough time); next to it what the car does with openpilot on asking
+    about 0 (-0.1..+0.1) and no brakes.
+    Approaches (D) get: the mean and the strongest request in the first 5 s, the distance covered with the brakes on /
+    coasting / on the gas (or openpilot asking 0 or more), and the deceleration while braking and while coasting (for the
+    driver's approaches: the deceleration while the driver coasted).
+ The code's wanted gap uses /data/highway_follow if it is there (read only; "<time gap s> [<full speed mph>]", as the
+ highway follow of long_mpc.py reads it: from the full speed (45 mph) up T = min(personality T, file), blended in over the
+ 10 mph below). It is read now, not from the logs: drives on a branch without the highway follow had the personality T
+ (a note says so; --highway-follow off / 0.8 / 0.8,45 overrides the file).
 Only reads logs. Writes nothing. Exit codes: 0 = report printed, 1 = no driving at 45 mph or faster with a car ahead,
 2 = problem (car on, no logs, missing libraries, a bug).
 """
@@ -63,12 +85,14 @@ import os        # noqa: E402
 import re        # noqa: E402
 import time      # noqa: E402
 
-TOOL_VERSION = '1.1 (2026-10-19)'
+TOOL_VERSION = '1.2.1 (2026-10-20)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
 REEXEC_FLAG = 'MK7_FOLLOW_CHECK_REEXEC'
 ONROAD_PARAM = '/data/params/d/IsOnroad'
+HF_FILE = '/data/highway_follow'
+DBC_REL = ('opendbc_repo/opendbc/dbc/vw_mqb.dbc', 'opendbc/dbc/vw_mqb.dbc')
 ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 LIST_N = 8
 NAN = float('nan')
@@ -120,6 +144,39 @@ A_EGO_MAX = 3.5        # m/s2: the panda's braking limit (ACCEL_MIN)
 A_LEAD_CAP = 12.0      # m/s2: lead braking beyond this is reported as 'a wall' (instant stop)
 REC_SPEEDS_MPH = (50, 65, 80, 90)
 SAFETY_SPEEDS_MPH = (65, 90)
+# ---- the highway follow of long_mpc.py (t2_highway_follow): /data/highway_follow "<time gap s> [<full speed mph>]"
+HF_T_LIMITS = (0.5, 1.75)    # s
+HF_V_LIMITS = (35.0, 90.0)   # mph
+HF_V_DEFAULT = 45.0          # mph: full speed when the file gives only the time gap
+HF_BAND_MPH = 10.0           # mph below the full speed over which the cut blends in
+# ---- F. coast or brake
+BRAKE_BAR = 1.0        # bar over the resting pressure = the brakes are on
+MOM_ON = 40.0          # Nm: TSK_06 wheel brake torque request over this = on
+RESP_LAG_S = 0.5       # s: the car's answer is looked at this long after the request (carParams' delay when logged)
+REQ_BINS = [(0.0, -0.3), (-0.3, -0.6), (-0.6, -1.0), (-1.0, -9.0)]   # m/s2 request bins (top inclusive of 0: under 0)
+REQ_NAMES = ['0..-0.3', '-0.3..-0.6', '-0.6..-1.0', '< -1.0']
+COAST_OFF_S = 1.0      # s: the gas and the brake pedal off at least this long = coasting (engine torque gone)
+ASK0 = 0.1             # m/s2: openpilot 'asking about 0' = within this
+BEYOND_COAST = 0.4     # m/s2: slowing this much more than coasting at that speed = the brakes by physics
+QUIET_ASK = 0.1        # m/s2: openpilot asking more than this (or the gas pressed) = no reason to brake (signal check)
+APP_REQ_S = 5.0        # s: the first seconds of an approach for the request profile
+DENSE_GAP = 0.25       # s: a CAN frame with no neighbour this close is a qlog leftover, not a signal (dropped)
+PASTE_APP_MAX = 6      # approach lines in the paste block (the openpilot ones first)
+# key, message, signal (car -> comma, from 'can' on the car's bus)
+CAR = [
+  ('p_can', 'ESP_05', 'ESP_Bremsdruck'),
+  ('drvbit', 'ESP_05', 'ESP_Fahrer_bremst'),
+  ('bit', 'ESP_05', 'ESP_Verz_TSK_aktiv'),
+  ('ecd', 'ESP_05', 'ECD_Bremslicht'),
+  ('tsk', 'Motor_20', 'TSK_a_Soll_gradientenbegrenzt'),
+  ('fcut', 'Motor_20', 'MO_Schubabschaltung'),
+  ('mom', 'TSK_06', 'TSK_Radbremsmom'),
+]
+SIG_TXT = {'P': 'brake pressure', 'bit': 'ESP brakes for TSK', 'mom': 'TSK brake torque', 'ecd': 'ECD brake light',
+           'drvbit': 'ESP driver brakes', 'tsk': 'TSK target', 'fcut': 'fuel cut'}
+SIG_SRC = {'bit': 'ESP_05 bit 27', 'mom': 'TSK_06', 'ecd': 'ESP_05 bit 59', 'drvbit': 'ESP_05 bit 26', 'tsk': 'Motor_20',
+           'fcut': 'Motor_20 bit 38'}
+BRAKE_SIGS = ('P', 'bit', 'mom')   # 'brakes on' = any of these that is live
 PERS = {'aggressive': 0, 'standard': 1, 'relaxed': 2}
 PERS_NAME = {v: k for k, v in PERS.items()}
 SRC = {'cruise': 0, 'lead0': 1, 'lead1': 2, 'e2e': 3}
@@ -158,6 +215,7 @@ class RT:
   log = None
   zstd = None
   LogReader = None
+  DBC = None
 
 
 def setup(op_dir):
@@ -180,7 +238,121 @@ def setup(op_dir):
     rt.LogReader = LogReader
   except Exception:
     pass
+  try:
+    from opendbc.can.dbc import DBC
+    rt.DBC = DBC
+  except Exception:
+    pass
   return rt
+
+
+# ============================================================================================ DBC (as mk7_stop_check)
+class SigDef:
+  def __init__(self, lsb, msb, size, le, signed, factor, offset):
+    self.lsb, self.msb, self.size, self.le, self.signed = lsb, msb, size, le, signed
+    self.factor, self.offset = factor, offset
+
+
+BO_RE = re.compile(r'^BO_ (\w+) (\w+) *: (\w+) (\w+)')
+SG_RE = re.compile(r'^SG_ (\w+)(?: \w+)? *: (\d+)\|(\d+)@(\d)([+-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\)')
+BE_BITS = [j + i * 8 for i in range(64) for j in range(7, -1, -1)]
+
+
+def load_dbc(rt, op_dir):
+  """{message name: (address, {signal name: SigDef})} from vw_mqb.dbc (openpilot's parser if importable); None if missing."""
+  path = next((os.path.join(op_dir, r) for r in DBC_REL if os.path.isfile(os.path.join(op_dir, r))), None)
+  if path is None:
+    return None
+  msgs = {}
+  if rt.DBC is not None:
+    try:
+      for addr, m in rt.DBC(path).msgs.items():
+        msgs[m.name] = (addr, {sn: SigDef(s.lsb, s.msb, s.size, s.is_little_endian, s.is_signed, float(s.factor),
+                                          float(s.offset)) for sn, s in m.sigs.items()})
+      return msgs
+    except Exception:
+      msgs = {}
+  cur = None
+  with open(path, encoding='utf-8', errors='replace') as f:
+    for line in f:
+      line = line.strip()
+      if line.startswith('BO_ '):
+        m = BO_RE.match(line)
+        if m:
+          cur = msgs[m.group(2)] = (int(m.group(1), 0), {})
+      elif line.startswith('SG_ ') and cur is not None:
+        m = SG_RE.match(line)
+        if m:
+          start, size, le = int(m.group(2)), int(m.group(3)), m.group(4) == '1'
+          lsb, msb = (start, start + size - 1) if le else (BE_BITS[BE_BITS.index(start) + size - 1], start)
+          cur[1][m.group(1)] = SigDef(lsb, msb, size, le, m.group(5) == '-', float(m.group(6)), float(m.group(7)))
+  return msgs
+
+
+def decode(np, words, s):
+  """Physical values of one signal from 8-byte little-endian words (vectorised for little-endian signals)."""
+  if s.le:
+    raw = ((words >> np.uint64(s.lsb)) & np.uint64((1 << s.size) - 1)).astype(np.int64)
+  else:
+    out = []
+    for w in words:
+      dat, ret, i, bits = int(w).to_bytes(8, 'little'), 0, s.msb // 8, s.size
+      while 0 <= i < 8 and bits > 0:
+        lo = s.lsb if (s.lsb // 8) == i else i * 8
+        hi = s.msb if (s.msb // 8) == i else (i + 1) * 8 - 1
+        n = hi - lo + 1
+        ret |= ((dat[i] >> (lo - i * 8)) & ((1 << n) - 1)) << (bits - n)
+        bits -= n
+        i += 1
+      out.append(ret)
+    raw = np.array(out, dtype=np.int64)
+  if s.signed:
+    raw = np.where(raw >= (1 << (s.size - 1)), raw - (1 << s.size), raw)
+  return raw, raw.astype(np.float64) * s.factor + s.offset
+
+
+def dense(np, t, d):
+  """(t, words) without isolated frames: qlogs keep 1 CAN message in thousands, too few to follow a signal."""
+  if len(t) < 3:
+    return t[:0], d[:0]
+  g = np.diff(t)
+  keep = np.concatenate([[False], g <= DENSE_GAP]) | np.concatenate([g <= DENSE_GAP, [False]])
+  return (t, d) if keep.all() else (t[keep], d[keep])
+
+
+# ============================================================================================ the highway follow file
+def parse_highway_follow(text, cli=False):
+  """(time gap s, full speed mph) as long_mpc.py's read_highway_follow reads the file, or None (= off). The comma form
+  (0.8,45) is only for --highway-follow: long_mpc.py reads a file with a comma as junk (= off), so the file is parsed as it is."""
+  try:
+    vals = [float(v) for v in (str(text).replace(',', ' ') if cli else str(text)).split()]
+  except ValueError:
+    return None
+  if len(vals) not in (1, 2) or not all(math.isfinite(v) for v in vals) or vals[0] <= 0.0:
+    return None
+  v_full = min(max(vals[1], HF_V_LIMITS[0]), HF_V_LIMITS[1]) if len(vals) == 2 else HF_V_DEFAULT
+  return min(max(vals[0], HF_T_LIMITS[0]), HF_T_LIMITS[1]), v_full
+
+
+def read_highway_follow(path):
+  """(hf or None, what the file said). Read only."""
+  try:
+    with open(path) as f:
+      text = f.read()            # all of it, as long_mpc.py does (a long file with junk at the end is off there too)
+  except (OSError, ValueError):
+    return None, None
+  return parse_highway_follow(text), text.strip()[:40]
+
+
+def code_T(np, v, t_follow, hf):
+  """The follow time the code uses at speed v (m/s, array or scalar), steady state (the slew of the cut left out)."""
+  if hf is None:
+    return np.full(np.shape(v), t_follow) if np.ndim(v) else float(t_follow)
+  hf_t, v_full = hf
+  lo, hi = (v_full - HF_BAND_MPH) / MPH, v_full / MPH
+  w = np.interp(np.nan_to_num(np.asarray(v, dtype=np.float64), nan=0.0), [lo, hi], [0.0, 1.0])
+  out = t_follow - max(t_follow - hf_t, 0.0) * w
+  return out if np.ndim(v) else float(out)
 
 
 # ============================================================================================ drives
@@ -308,16 +480,33 @@ class Table:
     return a
 
 
-def read_route(rt, root, route, segs):
-  """Only the fields needed, all segments of one drive (rlog; qlog where a segment has no rlog). Times in s. No CAN."""
+class CanBuf:
+  __slots__ = ('t', 'd', 'ct', 'cd')
+
+  def __init__(self):
+    self.t, self.d, self.ct, self.cd = [], [], [], []
+
+  def flush(self, np):
+    if self.t:
+      self.ct.append(np.array(self.t, dtype=np.float64))
+      self.cd.append(np.array(self.d, dtype=np.uint64))
+      self.t.clear()
+      self.d.clear()
+
+
+def read_route(rt, root, route, segs, want=frozenset()):
+  """Only the fields needed, all segments of one drive (rlog; qlog where a segment has no rlog). Times in s.
+  CAN: only the addresses in want, from the car's buses (src 0-3), keyed by (address, src)."""
   np = rt.np
-  T = {'cs': Table(6), 'cc': Table(4), 'lp': Table(3), 'rs': Table(7), 'ss': Table(4)}
+  T = {'cs': Table(7), 'cc': Table(4), 'lp': Table(3), 'rs': Table(7), 'ss': Table(4)}
   cs_add, cc_add, lp_add, rs_add, ss_add = (T[k].rows.append for k in ('cs', 'cc', 'lp', 'rs', 'ss'))
   info = {'route': route, 'branch': '?', 'commit': '?', 'delay': NAN, 'op_long': -1, 'segs': 0, 'q_segs': 0, 'none': 0,
           'bad': 0, 'nseg': len(segs[route])}
   cs_n = cc_n = ss_n = 0
   last_ped = last_cc = last_ss = None
   src_get, pers_get = SRC.get, PERS.get
+  can = {}
+  from_bytes = int.from_bytes
   for n in sorted(segs[route]):
     p = seg_file(root, route, n, RLOGS)
     q = False
@@ -334,7 +523,23 @@ def read_route(rt, root, route, segs):
       got += 1
       try:
         w = e.which()
-        if w == 'can' or w == 'sendcan':
+        if w == 'can':
+          if want:
+            t = e.logMonoTime * 1e-9
+            for f in e.can:
+              a = f.address
+              if a in want:
+                src = f.src
+                if src < 4:
+                  dat = f.dat
+                  if len(dat) <= 8:
+                    b = can.get((a, src))
+                    if b is None:
+                      b = can[(a, src)] = CanBuf()
+                    b.t.append(t)
+                    b.d.append(from_bytes(dat, 'little'))
+          continue
+        if w == 'sendcan':
           continue
         if w == 'carState':
           c = e.carState
@@ -342,7 +547,7 @@ def read_route(rt, root, route, segs):
           gas, brk = c.gasPressed, c.brakePressed
           ped = (gas, brk)
           if q or cs_n % 2 == 0 or gas or brk or ped != last_ped:   # 50 Hz, every pedal frame and every pedal edge
-            cs_add((e.logMonoTime * 1e-9, c.vEgo, c.aEgo, c.vCruise, gas, brk))
+            cs_add((e.logMonoTime * 1e-9, c.vEgo, c.aEgo, c.vCruise, gas, brk, c.brake))
           last_ped = ped
         elif w == 'carControl':
           c = e.carControl
@@ -375,7 +580,22 @@ def read_route(rt, root, route, segs):
       info['bad'] += 1
     for tb in T.values():
       tb.flush(np)
-  return {k: tb.array(np) for k, tb in T.items()}, info
+    for b in can.values():
+      b.flush(np)
+  out = {k: tb.array(np) for k, tb in T.items()}
+  cans = {}
+  for k in list(can):
+    b = can.pop(k)
+    if b.ct:
+      t = np.concatenate(b.ct)
+      d = np.concatenate(b.cd)
+      b.ct, b.cd = [], []
+      if len(t) > 1 and not np.all(t[1:] >= t[:-1]):
+        o = np.argsort(t, kind='stable')
+        t, d = t[o], d[o]
+      cans[k] = (t, d)
+  out['can'] = cans
+  return out, info
 
 
 # ============================================================================================ signals
@@ -468,6 +688,11 @@ def nmax(x):
   return float(f.max()) if len(f) else NAN
 
 
+def nmean(x):
+  f = fin(x)
+  return float(f.mean()) if len(f) else NAN
+
+
 def isnum(x):
   return x is not None and x == x and not (isinstance(x, float) and math.isinf(x))
 
@@ -492,7 +717,7 @@ def band_name(i):
   return f'{lo}-{hi}'
 
 
-def build(rt, svc, info):
+def build(rt, svc, info, dbc=None, hf=None):
   """All signals on the 0.1 s grid of one drive."""
   np = rt.np
   D = Drive()
@@ -573,16 +798,132 @@ def build(rt, svc, info):
   else:
     D.pers = '?'
   D.t_follow = T_FOLLOW.get(D.pers, T_FOLLOW['aggressive'])
+  D.hf = hf
+  D.T_code = code_T(np, D.v, D.t_follow, hf)
   if D.pers not in ('aggressive', '?'):
     D.notes.append((0, f'drive {dr}: personality {D.pers} (T = {D.t_follow} s), not aggressive'))
   if (D.exp & D.en).sum() > 50:
     D.notes.append((0, f'drive {dr}: experimental mode was on for {(D.exp & D.en).sum() * DT:.0f} s while engaged'))
-  with np.errstate(invalid='ignore'):
-    D.want = (D.v ** 2 - np.maximum(D.vl, 0.0) ** 2) / (2 * COMFORT_BRAKE) + D.t_follow * D.v + STOP_DISTANCE
+  with np.errstate(invalid='ignore', divide='ignore'):     # vEgo 0 at a stop: the time gap is inf, as before, without a warning
+    D.want = (D.v ** 2 - np.maximum(D.vl, 0.0) ** 2) / (2 * COMFORT_BRAKE) + D.T_code * D.v + STOP_DISTANCE
     D.tg = D.d / D.v
     D.ttc = np.where(D.vrel < -0.1, D.d / np.maximum(-D.vrel, 0.1), INF)
   D.dslope = slope(np, D.d)
+  brake_signals(D, cs, svc.get('can', {}), dbc, info)
   return D
+
+
+def brake_signals(D, cs, can, dbc, info):
+  """F. The car's brake / TSK signals on the grid, which of them are live, 'brakes on', the lagged request."""
+  np = D.np
+  G, n = D.G, len(D.G)
+  dr = rid(info['route'])
+  D.sig, D.sig_src, D.live, D.sig_note = {}, {}, {}, {}
+  lag = info['delay'] if isnum(info['delay']) else RESP_LAG_S
+  D.lag_n = int(round(min(max(lag, 0.2), 1.0) / DT))
+  # CAN: per message the bus with the most frames (bus 0 first if it has a quarter of them), dense parts only
+  addr = {name: a for name, (a, _) in dbc.items()} if dbc else {}
+  picked = {}
+  for msg in sorted({m for _, m, _ in CAR}):
+    a = addr.get(msg)
+    cands = {src: x for (a_, src), x in can.items() if a_ == a}
+    if not cands:
+      continue
+    mx = max(len(x[0]) for x in cands.values())
+    src = min(s_ for s_, x in cands.items() if len(x[0]) >= 0.25 * mx)
+    t, d = dense(np, *cands[src])
+    if len(t) >= 10:
+      picked[msg] = (src, t, d)
+  for key, msg, sname in CAR:
+    sdef = dbc.get(msg, (None, {}))[1].get(sname) if dbc else None
+    if msg not in picked or sdef is None:
+      continue
+    src, t, d = picked[msg]
+    raw, val = decode(np, d, sdef)
+    if key == 'tsk':
+      val = np.where(val > 5.4, NAN, val)        # raw 127 = no value
+    if key == 'p_can':
+      val = np.where(raw >= (1 << sdef.size) - 1, NAN, val)   # all ones = no value
+    D.sig[key] = hold(np, t, val, G, stale=0.3)
+    D.sig_src[key] = f'{msg} bus {src}'
+  # the brake pressure: CAN, else carState.brake (= ESP_Bremsdruck / 250 in carstate.py)
+  p_cs = grid_interp(np, cs[:, 0], cs[:, 6] * 250.0, G, gap=0.3) if cs.shape[1] > 6 else np.full(n, NAN)
+  D.p_cs_diff = NAN
+  if 'p_can' in D.sig:
+    D.sig['P'], D.sig_src['P'] = D.sig.pop('p_can'), D.sig_src.pop('p_can')
+    both = np.isfinite(D.sig['P']) & np.isfinite(p_cs)
+    if both.sum() >= 50 and np.nanmax(np.abs(p_cs)) > 0.0:
+      D.p_cs_diff = float(np.percentile(np.abs(D.sig['P'][both] - p_cs[both]), 95))
+  elif np.isfinite(p_cs).any():
+    D.sig['P'], D.sig_src['P'] = p_cs, 'carState.brake'
+  with np.errstate(invalid='ignore'):
+    moving = D.v > 1.0
+  ask_l = np.full(n, NAN)                 # the request lag_n before (openpilot driving then and now)
+  if n > D.lag_n:
+    ask_l[D.lag_n:] = np.where(D.mode[:-D.lag_n] == M_OP, D.ask[:-D.lag_n], NAN)
+  D.ask_l = np.where(D.mode == M_OP, ask_l, NAN)
+  with np.errstate(invalid='ignore'):
+    quiet = moving & ~D.brk & (D.gas | (D.ask_l > QUIET_ASK))
+  # pressure: resting value and on
+  D.p0 = NAN
+  on = {}
+  if 'P' in D.sig:
+    P = D.sig['P']
+    q = P[quiet & np.isfinite(P)]
+    D.p0 = float(np.median(q)) if len(q) >= 20 else nq(P, 10)
+    f = fin(P)
+    rng_ok = len(f) >= 20 and (np.percentile(f, 99.5) - np.percentile(f, 0.5)) >= 2.0 * BRAKE_BAR
+    with np.errstate(invalid='ignore'):
+      on['P'] = np.where(np.isfinite(P), (P - D.p0) > BRAKE_BAR, NAN)
+    D.live['P'] = bool(rng_ok)
+    if not rng_ok:
+      D.sig_note['P'] = 'never moved'
+  for key in ('bit', 'ecd', 'drvbit', 'fcut', 'mom'):
+    if key not in D.sig:
+      continue
+    x = D.sig[key]
+    with np.errstate(invalid='ignore'):
+      on[key] = np.where(np.isfinite(x), x > (MOM_ON if key == 'mom' else 0.5), NAN)
+    o = on[key]
+    n_on = int(np.nansum(o))
+    qk = quiet & np.isfinite(o)
+    stuck = qk.sum() >= 50 and np.nanmean(o[qk]) > 0.05
+    D.live[key] = bool(n_on >= 3 and not stuck)
+    if n_on < 3:
+      D.sig_note[key] = 'never on'
+    elif stuck:
+      D.sig_note[key] = f'on {100 * np.nanmean(o[qk]):.0f}% while accelerating'
+  if 'tsk' in D.sig:
+    x = D.sig['tsk']
+    opm = (D.mode == M_OP) & np.isfinite(x)
+    D.live['tsk'] = bool(opm.sum() >= 50 and np.nanstd(x[opm]) >= 0.05)
+    if not D.live['tsk']:
+      D.sig_note['tsk'] = 'never moved while openpilot drove'
+  D.on = on
+  # brakes on = any live brake signal (nan where none is live or known)
+  live_b = [k for k in BRAKE_SIGS if D.live.get(k)]
+  D.brk_known = bool(live_b)
+  if live_b:
+    stack = np.vstack([on[k] for k in live_b])
+    known = np.isfinite(stack).any(axis=0)
+    D.brk_on = np.where(known, np.nansum(np.nan_to_num(stack, nan=0.0), axis=0) > 0, NAN)
+  else:
+    D.brk_on = np.full(n, NAN)
+  # coasting: the gas and the brake pedal off for COAST_OFF_S, no brake signal on
+  off_n = int(round(COAST_OFF_S / DT))
+  busy = (D.gas | D.brk).astype(np.int32)
+  c = np.concatenate([[0], np.cumsum(busy)])
+  k = np.arange(n)
+  recent = (c[k + 1] - c[np.maximum(k + 1 - off_n, 0)]) > 0
+  recent[:off_n] = True
+  with np.errstate(invalid='ignore'):
+    D.no_brk = ~(D.brk_on > 0.5)          # unknown counts as off (the pedal is checked in recent)
+  D.coast_ok = ~recent & D.no_brk & D.hwy
+  if not D.brk_known and 'P' not in D.sig and (D.mode == M_OP).sum() > 600:
+    D.notes.append((0, f'drive {dr}: no brake signal (no CAN brake pressure / TSK bits, carState.brake empty): coast or brake unknown'))
+  elif not D.brk_known and (D.mode == M_OP).sum() > 600:
+    D.notes.append((0, f"drive {dr}: no live brake signal ({', '.join(f'{SIG_TXT[k]} {D.sig_note.get(k, chr(45))}' for k in BRAKE_SIGS if k in D.sig)}):"
+                       " coast or brake from the physics column only"))
 
 
 def clock(D, k):
@@ -818,7 +1159,171 @@ def find_approaches(D):
                 'gas_ask': nmed(D.ask[max(k - 3, k0):k]) if k > k0 else NAN, 'gas_v': float(D.v[k])})
     else:
       e['gas_k'] = None
+    # v1.2: the request in the first 5 s, the distance with the brakes on / coasting / on the gas, the decel in each
+    r5 = slice(k0, min(k0 + int(round(APP_REQ_S / DT)), n))
+    a5 = np.where(D.mode[r5] == M_OP, D.ask[r5], NAN)
+    e['req5_mean'], e['req5_min'] = nmean(a5), nmin(a5)
+    co = slice(k0, k1)
+    op_c = D.mode[co] == M_OP
+    ask_c = np.where(np.isfinite(D.ask_l[co]), D.ask_l[co], D.ask[co])
+    with np.errstate(invalid='ignore'):
+      brk_c = (D.brk_on[co] > 0.5) | D.brk[co]
+      gas_c = ~brk_c & (D.gas[co] | (op_c & (ask_c >= 0.0)))
+    coast_c = ~brk_c & ~gas_c
+    dist = np.nan_to_num(D.v[co], nan=0.0) * DT
+    e['dist'] = float(dist.sum())
+    e['dist_brk'], e['dist_gas'], e['dist_coast'] = float(dist[brk_c].sum()), float(dist[gas_c].sum()), float(dist[coast_c].sum())
+    e['brk_known'] = D.brk_known
+    ae = D.aego[co]
+    e['a_brk'] = nmed(ae[brk_c])
+    e['a_coast'] = nmed(ae[coast_c & np.where(op_c, True, D.coast_ok[co])])   # the driver: gas and pedal off for 1 s
     out.append(e)
+  return out
+
+
+# ============================================================================================ F. coast or brake
+def band_idx(np, v):
+  """Band index per point (-1 under 45 mph or unknown)."""
+  vm = np.nan_to_num(np.asarray(v, dtype=np.float64), nan=0.0) * MPH
+  return np.where(vm >= BANDS[0][0], np.digitize(vm, [b[0] for b in BANDS[1:]]), -1).astype(np.int8)
+
+
+SIG_CTX = ('pedal', 'op1', 'op06', 'op03', 'quiet')
+
+
+def signal_stats(D):
+  """Per signal: on (or the median value for the TSK target) in five situations; counts so drives can be pooled."""
+  np = D.np
+  with np.errstate(invalid='ignore'):
+    mv = D.v > 1.0
+    al = D.ask_l
+    ctx = {'pedal': mv & D.brk, 'op1': mv & ~D.brk & (al < -1.0), 'op06': mv & ~D.brk & (al >= -1.0) & (al < -0.6),
+           'op03': mv & ~D.brk & (al >= -0.3) & (al < 0.0), 'quiet': mv & ~D.brk & (D.gas | (al > QUIET_ASK))}
+  st = {}
+  for key, x in D.sig.items():
+    f = fin(x)
+    r = {'src': D.sig_src[key], 'live': D.live.get(key, False), 'note': D.sig_note.get(key, ''), 'n': int(np.isfinite(x).sum()),
+         'lo': float(np.percentile(f, 0.5)) if len(f) else NAN, 'hi': float(np.percentile(f, 99.5)) if len(f) else NAN}
+    if key == 'tsk':
+      r['vals'] = {c: x[m & np.isfinite(x)].astype(np.float32) for c, m in ctx.items()}
+    else:
+      o = D.on[key]
+      r['cnt'] = {c: (int(np.nansum(o[m])), int(np.isfinite(o[m]).sum())) for c, m in ctx.items()}
+    st[key] = r
+  st['_p0'] = D.p0
+  st['_cs_diff'] = D.p_cs_diff
+  return st
+
+
+def coast_brake_points(D, app):
+  """Compact point lists for the pooled F tables: openpilot asking under 0 at 45+, coasting with openpilot off, openpilot asking ~0."""
+  np = D.np
+  in_app = np.zeros(len(D.G), bool)
+  for e in app:
+    in_app[e['k0']:e['k1']] = True
+  b = band_idx(np, D.v)
+  with np.errstate(invalid='ignore'):
+    op = (D.mode == M_OP) & D.hwy & ~D.brk & np.isfinite(D.aego) & (b >= 0)
+    m = op & (D.ask_l < 0.0)
+    m0 = op & (np.abs(D.ask_l) <= ASK0) & D.coast_ok
+    mc = (D.mode == M_MAN) & D.coast_ok & np.isfinite(D.aego) & (b >= 0)
+  f32 = np.float32
+
+  def on_of(key, mask):
+    return D.on[key][mask].astype(f32) if key in D.on and D.live.get(key) else np.full(int(mask.sum()), NAN, f32)
+  P = D.sig.get('P', np.full(len(D.G), NAN)) - (D.p0 if isnum(D.p0) else 0.0)
+  tsk = D.sig['tsk'] if D.live.get('tsk') else np.full(len(D.G), NAN)
+  return {'op': {'ask': D.ask_l[m].astype(f32), 'band': b[m], 'a': D.aego[m].astype(f32), 'brk': D.brk_on[m].astype(f32),
+                 'P': on_of('P', m), 'bit': on_of('bit', m), 'mom': on_of('mom', m), 'tsk': tsk[m].astype(f32),
+                 'pbar': P[m].astype(f32), 'app': in_app[m]},
+          'man': {'band': b[mc], 'a': D.aego[mc].astype(f32), 'fcut': on_of('fcut', mc) if 'fcut' in D.on else np.full(int(mc.sum()), NAN, f32)},
+          'op0': {'band': b[m0], 'a': D.aego[m0].astype(f32)}}
+
+
+def pool_points(parts):
+  out = {}
+  for grp in ('op', 'man', 'op0'):
+    keys = parts[0][grp].keys() if parts else []
+    out[grp] = {k: np.concatenate([p[grp][k] for p in parts]) for k in keys} if parts else {}
+  return out
+
+
+def share(x):
+  """Share of 1s among the known (finite) values, in %; nan if none known."""
+  f = fin(x)
+  return 100.0 * float(f.mean()) if len(f) else NAN
+
+
+def coast_brake(pts):
+  """The F tables: coast deceleration per band, and per request bin x band what the car did."""
+  res = {'coast': [], 'op0': [], 'bins': []}
+  man, op0, op = pts.get('man', {}), pts.get('op0', {}), pts.get('op', {})
+  ref = []
+  for bi in range(len(BANDS)):
+    a = man['a'][man['band'] == bi] if man else np.zeros(0)
+    fc = man['fcut'][man['band'] == bi] if man else np.zeros(0)
+    c = {'s': len(a) * DT, 'a': nmed(a), 'q1': nq(a, 25), 'q3': nq(a, 75), 'fcut': share(fc)}
+    res['coast'].append(c)
+    ref.append(c['a'] if c['s'] >= 5.0 else NAN)
+    a0 = op0['a'][op0['band'] == bi] if op0 else np.zeros(0)
+    res['op0'].append({'s': len(a0) * DT, 'a': nmed(a0)})
+  a_all = man['a'] if man else np.zeros(0)
+  res['coast_all'] = {'s': len(a_all) * DT, 'a': nmed(a_all), 'fcut': share(man['fcut']) if man else NAN}
+  res['ref'] = ref
+  res['miss'] = None
+  if not op or not len(op['ask']):
+    return res
+  refp = np.array([ref[b] if b >= 0 else NAN for b in range(len(BANDS))] + [NAN])[op['band']]
+  with np.errstate(invalid='ignore'):
+    beyond = np.where(np.isfinite(refp) & np.isfinite(op['a']), (op['a'] < refp - BEYOND_COAST).astype(np.float32), NAN)
+  for lo, hi in REQ_BINS:
+    in_bin = (op['ask'] < lo) & (op['ask'] >= hi) if lo < 0 else (op['ask'] < 0.0) & (op['ask'] >= hi)
+    rows = []
+    for bi in list(range(len(BANDS))) + ['all', 'app']:
+      m = in_bin & ((op['band'] == bi) if bi not in ('all', 'app') else (op['app'] if bi == 'app' else True))
+      if not m.any():
+        rows.append(None)
+        continue
+      brk = op['brk'][m]
+      on = np.nan_to_num(brk, nan=0.0) > 0.5
+      rows.append({'band': bi, 's': int(m.sum()) * DT, 'brk': share(brk), 'P': share(op['P'][m]), 'bit': share(op['bit'][m]),
+                   'mom': share(op['mom'][m]), 'beyond': share(beyond[m]), 'a': nmed(op['a'][m]), 'ask': nmed(op['ask'][m]),
+                   'tsk': nmed(op['tsk'][m]), 'pbar': nmed(op['pbar'][m][on]) if on.any() else NAN,
+                   'a_on': nmed(op['a'][m][on]) if on.any() else NAN, 'a_off': nmed(op['a'][m][~on & np.isfinite(brk)]),
+                   'ref': ref[bi] if isinstance(bi, int) else NAN})
+    res['bins'].append(rows)
+  a = res['bins'][-1][len(BANDS)]      # under -1.0: the car slowed far beyond coasting while no brake signal was on?
+  if a is not None and a['s'] >= 5.0 and isnum(a['beyond']) and a['beyond'] >= 50.0 and isnum(a['brk']) and a['brk'] <= 10.0:
+    res['miss'] = a
+  return res
+
+
+def pool_sigstats(sts):
+  """Signal check pooled over the drives."""
+  out = {}
+  for st in sts:
+    for key, r in st.items():
+      if key.startswith('_'):
+        continue
+      o = out.setdefault(key, {'src': set(), 'live': 0, 'drives': 0, 'notes': set(), 'n': 0, 'lo': [], 'hi': [], 'cnt': {}, 'vals': {}})
+      o['src'].add(r['src'])
+      o['live'] += int(r['live'])
+      o['drives'] += 1
+      if r['note']:
+        o['notes'].add(r['note'])
+      o['n'] += r['n']
+      o['lo'].append(r['lo'])
+      o['hi'].append(r['hi'])
+      for c, (a, b) in r.get('cnt', {}).items():
+        x = o['cnt'].get(c, (0, 0))
+        o['cnt'][c] = (x[0] + a, x[1] + b)
+      for c, v in r.get('vals', {}).items():
+        o['vals'].setdefault(c, []).append(v)
+  for o in out.values():
+    o['lo'], o['hi'] = nmin(o['lo']), nmax(o['hi'])
+    o['vals'] = {c: nmed(np.concatenate(v)) if v else NAN for c, v in o['vals'].items()}
+  out['_p0'] = [st['_p0'] for st in sts if isnum(st.get('_p0'))]
+  out['_cs_diff'] = [st['_cs_diff'] for st in sts if isnum(st.get('_cs_diff'))]
   return out
 
 
@@ -907,9 +1412,11 @@ def pooled(np, eps, mode, band=None, limited=None, settled=False):
           'tg_p10': nq(tg, 10), 'tg_p90': nq(tg, 90)}
 
 
-def recommend(np, steady, t_code):
-  """T that copies the driver's steady override gap; the resulting gaps and the safety margins."""
-  rec = {'t_code': t_code}
+def recommend(np, steady, t_code, hf=None):
+  """T that copies the driver's steady override gap; the resulting gaps and the safety margins. t_code = the personality's
+  T; with the highway follow file the code's T is code_T(speed) (rec['t_code'] = its value from the full speed up)."""
+  rec = {'t_base': t_code, 'hf': hf, 't_code': code_T(np, 1e3, t_code, hf),
+         'code_T': lambda v: code_T(np, v, t_code, hf)}
   for key, mode, lim, settled in (('ovr', M_OVR, None, False), ('man', M_MAN, None, False), ('op', M_OP, 'lead', True),
                                   ('op_all', M_OP, None, False)):
     rec[key] = pooled(np, steady, mode, None, lim, settled)
@@ -930,13 +1437,27 @@ def recommend(np, steady, t_code):
   rec['gaps'] = {}
   rec['safety'] = {}
   rec['sim'] = {}
-  for name, T in (('rec', rec['T_use']), ('today', t_code), ('man', max(rec['T_man'], 0.0) if isnum(rec['T_man']) else NAN)):
-    if not isnum(T):
+  for name, T in (('rec', rec['T_use']), ('today', None), ('man', max(rec['T_man'], 0.0) if isnum(rec['T_man']) else NAN)):
+    if T is None:
+      Tf = rec['code_T']
+    elif not isnum(T):
       continue
-    rec['gaps'][name] = {m: STOP_DISTANCE + T * m / MPH for m in REC_SPEEDS_MPH}
-    rec['safety'][name] = {m: lead_brake_absorbed(STOP_DISTANCE + T * m / MPH, m / MPH) for m in SAFETY_SPEEDS_MPH}
-    rec['sim'][name] = {m: sim_absorbed(T, m) for m in SAFETY_SPEEDS_MPH}
+    else:
+      def Tf(v, T=T):
+        return T
+    rec['gaps'][name] = {m: STOP_DISTANCE + Tf(m / MPH) * m / MPH for m in REC_SPEEDS_MPH}
+    rec['safety'][name] = {m: lead_brake_absorbed(STOP_DISTANCE + Tf(m / MPH) * m / MPH, m / MPH) for m in SAFETY_SPEEDS_MPH}
+    rec['sim'][name] = {m: sim_absorbed(Tf(m / MPH), m) for m in SAFETY_SPEEDS_MPH}
   return rec
+
+
+def code_txt(rec):
+  """The code's follow time in words (with the highway follow file: from which speed, blended where)."""
+  if rec['hf'] is None or rec['t_code'] >= rec['t_base']:
+    return f"{rec['t_code']:.2f} s"
+  hf_t, v_full = rec['hf']
+  return (f"{rec['t_code']:.2f} s from {v_full:.0f} mph (highway follow; {rec['t_base']:.2f} s under"
+          f" {v_full - HF_BAND_MPH:.0f} mph, blended between)")
 
 
 # ============================================================================================ text
@@ -1022,7 +1543,7 @@ def print_steady(eps, rec):
       p = rec[key + '_bands'][b]
       if p is None:
         continue
-      want = STOP_DISTANCE + rec['t_code'] * p['v']
+      want = STOP_DISTANCE + rec['code_T'](p['v']) * p['v']
       say(f"   {band_name(b):<7} {MODE_SHORT[mode]:<4}  {p['n']:8d}  {p['s']:8.0f}   {p['tg'][1]:5.2f} [{p['tg'][0]:4.2f}-{p['tg'][2]:4.2f}]"
           f"          {p['d'][1]:5.1f} [{p['d'][0]:4.1f}-{p['d'][2]:4.1f}]        {p['T'][1]:5.2f} [{p['T'][0]:4.2f}-{p['T'][2]:4.2f}]"
           f"     {p['v'] * MPH:4.0f}   {want:7.1f}      {p['n_set'] if mode == M_OP else '-':>4} {p['n_post'] if mode == M_OP else '-':>6}")
@@ -1039,10 +1560,11 @@ def print_steady(eps, rec):
   say('   HEADLINE (all bands):')
   for ln in parts:
     say(ln)
-  say(f"   the code wants 6 m + {rec['t_code']:.2f} s x speed: {STOP_DISTANCE + rec['t_code'] * 50 / MPH:.0f} m at 50 mph,"
-      f" {STOP_DISTANCE + rec['t_code'] * 65 / MPH:.0f} m at 65, {STOP_DISTANCE + rec['t_code'] * 75 / MPH:.0f} m at 75,"
-      f" {STOP_DISTANCE + rec['t_code'] * 90 / MPH:.0f} m at 90 (time gap {rec['t_code'] + STOP_DISTANCE / (50 / MPH):.2f} s at 50,"
-      f" {rec['t_code'] + STOP_DISTANCE / (90 / MPH):.2f} s at 90)")
+  Tc = rec['code_T']
+  say(f"   the code wants 6 m + {code_txt(rec)} x speed: {STOP_DISTANCE + Tc(50 / MPH) * 50 / MPH:.0f} m at 50 mph,"
+      f" {STOP_DISTANCE + Tc(65 / MPH) * 65 / MPH:.0f} m at 65, {STOP_DISTANCE + Tc(75 / MPH) * 75 / MPH:.0f} m at 75,"
+      f" {STOP_DISTANCE + Tc(90 / MPH) * 90 / MPH:.0f} m at 90 (time gap {Tc(50 / MPH) + STOP_DISTANCE / (50 / MPH):.2f} s at 50,"
+      f" {Tc(90 / MPH) + STOP_DISTANCE / (90 / MPH):.2f} s at 90)")
 
 
 def print_overrides(ovr, taps):
@@ -1087,9 +1609,12 @@ def print_approaches(app):
   say("   start: mode, speed, the car ahead's speed, gap, time to collision (TTC); OP braked: when openpilot first asked under -0.3 (s after"
       ' the start; gap, tgap, TTC there) and its strongest request; driver: the gas lifted / brake pressed (gap, tgap, TTC);')
   say('   gas in OP: the driver pressed the gas while openpilot braked in the approach (gap, TTC, what openpilot asked); closest = the'
-      " smallest gap; end = matched the car ahead's speed / lost it")
+      " smallest gap; end = matched the car ahead's speed / lost it;")
+  say("   req 5 s = openpilot's mean / strongest request in the first 5 s; distance: % of the approach driven with the brakes on /"
+      " coasting / on the gas (or openpilot asking 0 or more) ('?' = no live brake signal: the brake pedal only);"
+      ' decel = aEgo while braking / coasting')
   say('     #  drive     at  mode   mph  lead  gap  TTC  | OP braked @s  gap  tgap   TTC   min   | driver     @s  gap  tgap   TTC  |'
-      ' gas in OP @s  gap   TTC   ask | closest  end')
+      ' gas in OP @s  gap   TTC   ask | closest  end     | req 5 s mean  min | dist m  brk coast gas % | decel brk coast')
   for e in app:
     op = (f"{fmt(e['brk_t'], 1, 5)} {fmt(e['brk_d'], 0, 4)}m {fmt(e['brk_tg'], 2, 5)} {ttc_txt(e['brk_ttc'])} {fmt(e['a_min'], 2, 6)}"
           if e['brk_k'] is not None else (f"  none           {fmt(e['a_min'], 2, 6)}" if e['op_s'] > 0 else '  (not in OP)        '))
@@ -1098,8 +1623,27 @@ def print_approaches(app):
     gas = (f"{fmt(e['gas_t'], 1, 5)} {fmt(e['gas_d'], 0, 4)}m {ttc_txt(e['gas_ttc'])} {fmt(e['gas_ask'], 2, 5)}"
            if e['gas_k'] is not None else '  -                   ')
     say(f"  {letter(e):>4}  {e['rid']:>5} {e['clock']:>6}  {MODE_SHORT[e['mode']]:<4} {mph(e['v0']):5.0f} {mph(e['vl0']):5.0f}"
-        f" {fmt(e['d0'], 0, 4)}m {ttc_txt(e['ttc0'])} | {op} | {drv} | {gas} | {fmt(e['d_min'], 0, 4)}m  {e['end']}")
+        f" {fmt(e['d0'], 0, 4)}m {ttc_txt(e['ttc0'])} | {op} | {drv} | {gas} | {fmt(e['d_min'], 0, 4)}m  {e['end']:<7} |"
+        f"   {fmt(e['req5_mean'], 2, 5)} {fmt(e['req5_min'], 2, 5)} | {e['dist']:5.0f} {dist_txt(e, ' ')} | {fmt(e['a_brk'], 2, 5)} {fmt(e['a_coast'], 2, 5)}")
   say()
+
+
+def dist_pc(e):
+  """(brakes on, coasting, on the gas) in % of the approach distance."""
+  d = e['dist']
+  if d <= 0:
+    return NAN, NAN, NAN
+  return 100 * e['dist_brk'] / d, 100 * e['dist_coast'] / d, 100 * e['dist_gas'] / d
+
+
+def dist_txt(e, sep='/'):
+  b, c, g = dist_pc(e)
+  if not isnum(b):
+    return sep.join(['  -'] * 3) if sep == ' ' else '-'
+  q = '' if e['brk_known'] or e['mode'] != M_OP else '?'
+  if sep == ' ':
+    return f"{b:3.0f}{q or ' '} {c:4.0f} {g:4.0f}"
+  return f'{b:.0f}{q}/{c:.0f}/{g:.0f}%'
 
 
 def app_summary(app):
@@ -1119,12 +1663,19 @@ def app_summary(app):
             'n_brake': sum(1 for e in dl if e['drv_kind'] == 'brake'), 'drv_d': nmed([e['drv_d'] for e in dl]),
             'drv_tg': nmed([e['drv_tg'] for e in dl]), 'drv_ttc': nmed([e['drv_ttc'] for e in dl if e['drv_ttc'] < 99]),
             'drv_dmin': nmed([e['d_min'] for e in drv]), 'op_dmin': nmed([e['d_min'] for e in op])})
+  def dpc(es, key):     # distance-weighted over the approaches, %
+    tot = sum(e['dist'] for e in es)
+    return 100 * sum(e[key] for e in es) / tot if tot > 0 else NAN
+  s.update({'op_req5_mean': nmed([e['req5_mean'] for e in op]), 'op_req5_min': nmed([e['req5_min'] for e in op]),
+            'op_brkpc': dpc(op, 'dist_brk'), 'op_coastpc': dpc(op, 'dist_coast'),
+            'op_a_brk': nmed([e['a_brk'] for e in op]), 'op_a_coast': nmed([e['a_coast'] for e in op]),
+            'op_brk_known': all(e['brk_known'] for e in op) if op else False,
+            'drv_a_coast': nmed([e['a_coast'] for e in drv]), 'drv_brkpc': dpc(drv, 'dist_brk'), 'drv_coastpc': dpc(drv, 'dist_coast')})
   return s
 
 
 def print_recommendation(rec, osum, asum, R):
   say('E. RECOMMENDATION')
-  t_code = rec['t_code']
   pers = sorted({r['pers'] for r in R})
   if rec['T_src'] is None:
     say('   No steady following under a gas override (nor with openpilot off) at 45 mph or faster with a car ahead in these drives,'
@@ -1141,16 +1692,18 @@ def print_recommendation(rec, osum, asum, R):
     say(f"     (gas override alone: T {rec['ovr']['T'][1]:.2f} s over {rec['ovr']['s']:.0f} s;"
         f" openpilot off alone: T {rec['man']['T'][1]:.2f} s over {rec['man']['s']:.0f} s)")
   say(f"   With the compiled 6 m, the follow time that reproduces it is T = (gap - 6) / speed = {T:.2f} s (median; quartiles"
-      f" {p['T'][0]:.2f}-{p['T'][2]:.2f}), against {t_code:.2f} s in the code today ({'/'.join(pers)}).")
+      f" {p['T'][0]:.2f}-{p['T'][2]:.2f}), against {code_txt(rec)} in the code today ({'/'.join(pers)}).")
   bands = [(band_name(b), q) for b, q in enumerate(rec[rec['use'] + '_bands']) if q]
   if bands:
     say('   Per band: ' + '; '.join(f"{nm} mph T {q['T'][1]:.2f} s (tgap {q['tg'][1]:.2f}, {q['d'][1]:.0f} m, {q['s']:.0f} s)" for nm, q in bands))
   if rec['man'] and rec['ovr']:
     say(f"   With openpilot off the driver kept T {rec['T_man']:.2f} s (tgap {rec['man']['tg'][1]:.2f} s, {rec['man']['s']:.0f} s).")
   if rec['op']:
+    t_op_code = rec['code_T'](rec['op']['v'])
     say(f"   Check: openpilot's own settled gap with the car ahead holding the speed came out at T {rec['T_op']:.2f} s"
         f" (tgap {rec['op']['tg'][1]:.2f} s, {rec['op']['s']:.0f} s)" + (': the 6 m + T x speed formula matches the logs.'
-        if abs(rec['T_op'] - t_code) < 0.12 else f": not the {t_code:.2f} s of the code (set speed, hills, or the lead not steady?)."))
+        if abs(rec['T_op'] - t_op_code) < 0.12 else f": not the {t_op_code:.2f} s of the code (set speed, hills, the lead not steady"
+        + (", or a drive without the highway follow?)." if rec['hf'] is not None else "?).")))
   g, gt = rec['gaps']['rec'], rec['gaps']['today']
   say(f"   T = {T:.2f} s gives a gap of " + ', '.join(f'{g[m]:.0f} m at {m} mph' for m in REC_SPEEDS_MPH)
       + f" (today {', '.join(f'{gt[m]:.0f}' for m in REC_SPEEDS_MPH)} m): time gap {T + STOP_DISTANCE / (65 / MPH):.2f} s at 65,"
@@ -1191,12 +1744,78 @@ def print_recommendation(rec, osum, asum, R):
       ln += (f", who lifted off / braked ({asum['n_lift']}/{asum['n_brake']}) at {asum['drv_d']:.0f} m / {asum['drv_tg']:.2f} s / TTC"
              f" {asum['drv_ttc']:.0f} s (median)")
     say(ln + '.')
+    if asum['n_op']:
+      say(f"   In openpilot's approaches it asked {f1(asum['op_req5_mean'], 2)} m/s2 on average in the first 5 s (strongest"
+          f" {f1(asum['op_req5_min'], 2)}, median) and drove {f1(asum['op_brkpc'], 0)}% of the distance with the brakes on"
+          + ('' if asum['op_brk_known'] else ' (no live brake signal on some drives: the pedal only)')
+          + f", {f1(asum['op_coastpc'], 0)}% coasting (all its approaches together); decel {f1(asum['op_a_brk'], 2)} braking,"
+          f" {f1(asum['op_a_coast'], 2)} coasting (median).")
+    if asum['n_drv']:
+      say("   In the driver's approaches " + (f"the car slowed {f1(asum['drv_a_coast'], 2)} m/s2 while he coasted (median), brakes on for"
+          if isnum(asum['drv_a_coast']) else 'he did not coast for 1 s or more (no coasting decel); brakes on for')
+          + f" {f1(asum['drv_brkpc'], 0)}% of the distance, coasting {f1(asum['drv_coastpc'], 0)}% (all together).")
     if asum['n_brk'] and asum['n_drv_act'] and isnum(asum['brk_ttc']) and isnum(asum['drv_ttc']):
       if asum['brk_ttc'] > 1.5 * asum['drv_ttc']:
         say('   Openpilot starts braking much earlier in an approach than the driver does: the closing behaviour, not only the'
             ' steady gap, is part of the feel (the v^2/5 terms and the jerk costs, not T).')
       else:
         say('   Openpilot and the driver start braking at similar TTCs when closing: the steady gap is the main difference.')
+
+
+def pcx(x, w=4):
+  return f'{x:{w - 1}.0f}%' if isnum(x) else ' ' * (w - 1) + '-'
+
+
+def print_coast_brake(sig, cb, lag_s):
+  say('F. COAST OR BRAKE AT 45+ (when openpilot asks to slow down: the brakes on, or only lifting off?)')
+  say("   SIGNAL CHECK: which signals carry real values on this car. on % in five situations: the driver's brake pedal down;"
+      ' openpilot asking under -1.0 / -0.6..-1.0 / 0..-0.3 m/s2; accelerating (gas, or openpilot asking over +0.1).')
+  say(f'   live = moves / turns on, and not on while accelerating. pressure on = {BRAKE_BAR:.0f} bar over its resting value; TSK'
+      ' target: the median value (m/s2) instead.')
+  say('   signal               source                 values      live    pedal  OP<-1  -0.6..-1  0..-0.3  accel   note')
+  for key in ('P', 'bit', 'mom', 'ecd', 'drvbit', 'fcut', 'tsk'):
+    o = sig.get(key)
+    if o is None:
+      say(f"   {SIG_TXT[key]:<20} not in the logs")
+      continue
+    src = '/'.join(sorted(o['src']))
+    rng = f"{f1(o['lo'], 1)}..{f1(o['hi'], 1)}"
+    if key == 'tsk':
+      cols = '  '.join(f"{fmt(o['vals'].get(c), 2, 6)}" for c in SIG_CTX)
+    else:
+      cols = '  '.join(pcx(100 * a / b if b else NAN, 6) for a, b in (o['cnt'].get(c, (0, 0)) for c in SIG_CTX))
+    say(f"   {SIG_TXT[key]:<20} {src:<22} {rng:>11}  {o['live']}/{o['drives']:<4} {cols}   {'; '.join(sorted(o['notes']))}")
+  if sig.get('_p0'):
+    say(f"   resting pressure {'/'.join(f1(x, 1) for x in sig['_p0'])} bar" + (f"; CAN vs carState.brake x 250: 95 % within"
+        f" {'/'.join(f1(x, 2) for x in sig['_cs_diff'])} bar" if sig.get('_cs_diff') else ''))
+  say()
+  say('   THIS CAR COASTING (openpilot off, the gas and the brake pedal off for 1 s or more, no brake signal): aEgo median [quartiles],'
+      " fuel cut = Motor_20 overrun fuel cut on; next to it openpilot on asking about 0 (-0.1..+0.1) with no brakes")
+  say('   band     coast s   decel m/s2 [q1-q3]     fuel cut |  OP ~0 s   decel')
+  for bi in range(len(BANDS)):
+    c, o0 = cb['coast'][bi], cb['op0'][bi]
+    say(f"   {band_name(bi):<7}  {c['s']:6.0f}   {fmt(c['a'], 2, 6)} [{fmt(c['q1'], 2, 5)} {fmt(c['q3'], 2, 5)}]   {pcx(c['fcut'], 6)}  |"
+        f"  {o0['s']:6.0f}   {fmt(o0['a'], 2, 6)}")
+  say()
+  say(f"   OPENPILOT ASKING UNDER 0 AT 45+ (each 0.1 s: the request, and the car {lag_s:.1f} s later): time; brakes on = any live brake"
+      ' signal (then each: pressure / TSK brake bit / brake torque request);')
+  say(f'   beyond coast = slowing {BEYOND_COAST} m/s2 more than this car coasts at that speed (the brakes by physics, whatever the signals'
+      ' say); decel = aEgo (all / brakes on / brakes off); coast = the coasting decel of the band;')
+  say('   TSK = the cruise control target (Motor_20); bar = median pressure over resting while on; app = only inside approaches')
+  say('   request      band       s   brakes  press  bit  torque beyond | ask    decel  on     off   | coast   TSK    bar')
+  for (name, rows) in zip(REQ_NAMES, cb['bins'], strict=False):
+    for r in rows:
+      if r is None:
+        continue
+      bn = band_name(r['band']) if isinstance(r['band'], int) else r['band']
+      say(f"   {name:<11}  {bn:<7} {r['s']:6.1f}  {pcx(r['brk'], 6)} {pcx(r['P'], 6)} {pcx(r['bit'], 5)} {pcx(r['mom'], 6)} {pcx(r['beyond'], 6)}"
+          f" | {fmt(r['ask'], 2, 5)}  {fmt(r['a'], 2, 5)} {fmt(r['a_on'], 2, 5)} {fmt(r['a_off'], 2, 5)} | {fmt(r['ref'], 2, 5)}"
+          f"  {fmt(r['tsk'], 2, 5)}  {fmt(r['pbar'], 1, 5)}")
+  if not cb['bins']:
+    say('   (openpilot never asked under 0 at 45+ in these drives)')
+  if cb.get('miss'):
+    say(f"   NOTE: asking under -1.0 the car slowed beyond coasting {cb['miss']['beyond']:.0f}% of the time but the brake signals were on only"
+        f" {cb['miss']['brk']:.0f}%: they probably do not see the cruise control's braking on this car; go by 'beyond coast'.")
 
 
 # ============================================================================================ detail
@@ -1261,7 +1880,9 @@ def paste_block(ctx):
   lines = [f"mk7_follow_check v{TOOL_VERSION.split()[0]} drives={','.join(r['rid'] for r in R)} hwy45+={a['s'] / 60:.1f}min"
            f" lead={ld['s'] / 60:.1f}min OP/OVR/MAN={pct(a['mode'], a['s'])} withlead={pct(ld['mode'], ld['s'])}"
            f" brk={pct([ld['brk']], ld['s'])} steady=S{len(steady)} ovr=O{len(ovr)}(+{ctx['taps']}taps) app=A{len(app)}"
-           f" code=6m+{rec['t_code']:.2f}s*v; tg=time-gap s d=gap m [q1-q3] T=(d-6)/v s; m/s2, mph, s"]
+           f" code=6m+{rec['t_code']:.2f}s*v" + (f"(hf {rec['hf'][0]:.2f}@{rec['hf'][1]:.0f}mph, pers {rec['t_base']:.2f})"
+                                                   if rec['hf'] is not None else '')
+           + "; tg=time-gap s d=gap m [q1-q3] T=(d-6)/v s; m/s2, mph, s"]
   shown_r = R if len(R) <= 5 else R[:3] + R[-2:]
   for r in shown_r:
     m = r['modes']
@@ -1287,10 +1908,15 @@ def paste_block(ctx):
       al += f"@{f1(asum['brk_t'], 1)}s d={f1(asum['brk_d'], 0)} tg={f1(asum['brk_tg'], 2)} ttc={f1(asum['brk_ttc'], 0)} min={f1(asum['a_min'], 2)}"
     if asum['n_gas']:
       al += f" gasin={asum['n_gas']}@d{f1(asum['gas_d'], 0)}/ttc{f1(asum['gas_ttc'], 0)}/ask{f1(asum['gas_ask'], 2)}"
+    if asum['n_op']:
+      al += (f" req5={f1(asum['op_req5_mean'], 2)}/{f1(asum['op_req5_min'], 2)} brkdist={f1(asum['op_brkpc'], 0)}%"
+             + ('' if asum['op_brk_known'] else '?') + f" a(b/c)={f1(asum['op_a_brk'], 2)}/{f1(asum['op_a_coast'], 2)}")
     al += f" dmin={f1(asum['op_dmin'], 0)} | DRV n={asum['n_drv']}(ovr{asum['n_ovr']},man{asum['n_man']}) lift/brk={asum['n_lift']}/{asum['n_brake']}"
     if asum['n_drv_act']:
       al += f"@d={f1(asum['drv_d'], 0)} tg={f1(asum['drv_tg'], 2)} ttc={f1(asum['drv_ttc'], 0)}"
     al += f" dmin={f1(asum['drv_dmin'], 0)}"
+    if asum['n_drv']:
+      al += f" coast_a={f1(asum['drv_a_coast'], 2)} brkdist={f1(asum['drv_brkpc'], 0)}%"
   else:
     al = 'A none'
   if rec['T_src'] is None:
@@ -1308,14 +1934,18 @@ def paste_block(ctx):
       rl.append(f"OVR n={osum['n']} dur={osum['dur']:.0f}s dn:tg={f1(osum['tg_dn'], 2)} ask={f1(osum['ask_dn'], 2)} opbrk={osum['n_brk_dn']}"
                 f" st:tg={f1(osum['tg_st'], 2)} up:tg={f1(osum['tg_up'], 2)} room={f1(osum['room_up'], 0)} after:min={f1(osum['a_min'], 2)}"
                 f" d+{f1(osum['d_grow'], 0)} v-{f1(mph(osum['v_drop']), 0)} regas={osum['n_regas']}")
+  fl = coast_brake_lines(ctx)                   # v1.2: G (signals), C (coasting), K (per request bin)
+  apl = app_lines(app)
   notes = [n for _, n in ctx['notes']][:3]
   if len(ctx['notes']) > 3:
     notes.append(f"(+{len(ctx['notes']) - 3} more notes in the full output above)")
-  fixed = len(lines) + 1 + len(rl) + 1          # header, D lines, A line, REC lines, the 'more' line
+  fixed = len(lines) + 1 + len(rl) + 1 + len(fl)   # header, D lines, A line, REC lines, the 'more' line, G / C / K
   room = PASTE_MAX - fixed - len(notes)
   if room < 6:
     notes = notes[:max(0, len(notes) - (6 - room))]
     room = PASTE_MAX - fixed - len(notes)
+  n_a = min(len(apl), PASTE_APP_MAX, max(room - 4, 0))   # the approaches first: what openpilot asked and the car did
+  room -= n_a
   bl.sort()
   n_b = min(len(bl), max(room - 3, room * 2 // 3))
   lines += [s for _, s in bl[:n_b]]
@@ -1340,15 +1970,78 @@ def paste_block(ctx):
                 + (' noOP' if e['after_op_s'] < 1.0 else ''))
   n_o = min(len(ol), max(room, 0), PASTE_OVR_MAX)
   lines += ol[:n_o]
-  more = (len(bl) - n_b) + (len(ol) - n_o)
+  more = (len(bl) - n_b) + (len(ol) - n_o) + (len(apl) - n_a)
   lines.append(al)
+  lines += apl[:n_a]
+  lines += fl
   lines += rl
   if more > 0:
-    lines.append(f'... {more} more band / override lines not shown (bands by time, overrides by the strongest fall-back)')
+    lines.append(f'... {more} more band / override / approach lines not shown (bands by time, overrides by the strongest fall-back,'
+                 ' approaches: openpilot first, fastest first)')
   lines += ['note: ' + n for n in notes]
   for ln in lines[:PASTE_MAX]:
     say(ln)
   say('===== PASTE THIS TO CLAUDE (end) =====')
+
+
+def app_lines(app):
+  """One paste line per approach: openpilot's first (fastest first), then the driver's."""
+  op = sorted([e for e in app if e['mode'] == M_OP], key=lambda e: -e['v0'])
+  dr = sorted([e for e in app if e['mode'] != M_OP], key=lambda e: -e['v0'])
+  out = []
+  n_dr = min(len(dr), max(2, PASTE_APP_MAX - len(op)))     # the driver's approaches are what openpilot is compared with:
+  for e in op[:PASTE_APP_MAX - n_dr] + dr[:n_dr]:          # keep 2 of them in the 6 lines when there are both
+    ln = (f"{letter(e)} {e['rid']} {e['clock']} {MODE_SHORT[e['mode']]} v={f1(mph(e['v0']), 0)}/{f1(mph(e['vl0']), 0)} d0={f1(e['d0'], 0)}"
+          f" ttc0={f1(e['ttc0'], 0)}")
+    if e['mode'] == M_OP or e['op_s'] > 0:
+      ln += (f" brk@{f1(e['brk_t'], 1)}s d={f1(e['brk_d'], 0)} tg={f1(e['brk_tg'], 2)} ttc={f1(e['brk_ttc'], 0)}" if e['brk_k'] is not None
+             else ' brk=none') + f" min={f1(e['a_min'], 2)} req5={f1(e['req5_mean'], 2)}/{f1(e['req5_min'], 2)}"
+    if e['drv_k'] is not None:
+      ln += f" {e['drv_kind']}@{f1(e['drv_t'], 1)}s d={f1(e['drv_d'], 0)} ttc={f1(e['drv_ttc'], 0)}"
+    if e['gas_k'] is not None:
+      ln += f" gas@{f1(e['gas_t'], 1)}s d={f1(e['gas_d'], 0)}"
+    ln += (f" dist={e['dist']:.0f}m b/c/g={dist_txt(e)} a(b/c)={f1(e['a_brk'], 2)}/{f1(e['a_coast'], 2)} dmin={f1(e['d_min'], 0)}")
+    out.append(ln)
+  return out
+
+
+def coast_brake_lines(ctx):
+  """G: the signal check; C: this car coasting per band; K: per request bin what the car did (with the bands)."""
+  sig, cb = ctx['sig'], ctx['cb']
+  if not ctx['tot']['lead']['s'] and not cb['coast_all']['s']:
+    return []
+  g = []
+  for key in ('P', 'bit', 'mom', 'ecd', 'tsk'):
+    o = sig.get(key)
+    if o is None:
+      g.append(f'{key}:none')
+      continue
+    if key == 'tsk':
+      g.append(f"tsk:{o['live']}/{o['drives']} " + '/'.join(f1(o['vals'].get(c), 2) for c in SIG_CTX[1:]))
+    else:
+      g.append(f"{key}:{o['live']}/{o['drives']} " + '/'.join(f1(100 * a / b if b else NAN, 0) for a, b in (o['cnt'].get(c, (0, 0)) for c in SIG_CTX)) + '%')
+  src = '/'.join(sorted(sig['P']['src'])) if 'P' in sig else '-'
+  out = [f"G live/drives on% pedal/OP<-1/-.6..-1/0..-.3/accel: {' '.join(g)} | P={src} p0={'/'.join(f1(x, 1) for x in sig.get('_p0', []))}"
+         + (f" cs-diff95={'/'.join(f1(x, 2) for x in sig['_cs_diff'])}" if sig.get('_cs_diff') else '')]
+  c = cb['coast']
+  out.append('C coast(OPoff,1s no pedals,no brakes) ' + ' '.join(f"{band_name(b)}={f1(c[b]['a'], 2)}({c[b]['s']:.0f}s)" for b in range(len(BANDS)))
+             + f" fcut={f1(cb['coast_all']['fcut'], 0)}% | OP~0 nobrk " + ' '.join(f"{band_name(b)}={f1(cb['op0'][b]['a'], 2)}({cb['op0'][b]['s']:.0f}s)"
+                                                                             for b in range(len(BANDS))))
+  for name, rows in zip(REQ_NAMES, cb['bins'], strict=False):
+    a = rows[len(BANDS)]
+    if a is None:
+      continue
+    ap = rows[len(BANDS) + 1]
+    ln = (f"K {name} t={a['s']:.0f}s brk={f1(a['brk'], 0)}%(p{f1(a['P'], 0)} bit{f1(a['bit'], 0)} mom{f1(a['mom'], 0)}) beyond={f1(a['beyond'], 0)}%"
+          f" ask={f1(a['ask'], 2)} a={f1(a['a'], 2)} on/off={f1(a['a_on'], 2)}/{f1(a['a_off'], 2)} tsk={f1(a['tsk'], 2)} bar={f1(a['pbar'], 1)}"
+          + (f" app:{ap['s']:.0f}s/{f1(ap['brk'], 0)}%/{f1(ap['a'], 2)}" if ap else '') + ' |')
+    for r in rows[:len(BANDS)]:
+      if r is not None:
+        ln += f" {band_name(r['band'])}:{r['s']:.0f}s/{f1(r['brk'], 0)}%/{f1(r['a'], 2)}/b{f1(r['beyond'], 0)}"
+    out.append(ln)
+  if cb.get('miss'):
+    out[-1] += ' MISS: brake signals off while slowing beyond coast'
+  return out
 
 
 # ============================================================================================ main
@@ -1359,6 +2052,10 @@ def parse(argv):
   p.add_argument('--detail', type=int, help='show episode N as a timeline (the number in the tables)')
   p.add_argument('--all', action='store_true', help='show every episode as a timeline')
   p.add_argument('--car-on', action='store_true', help='run even though the car is on (not recommended)')
+  p.add_argument('--no-can', action='store_true', help='faster: do not read CAN (brake pressure from carState.brake, no TSK signals)')
+  p.add_argument('--highway-follow', help="the highway follow time gap for 'code wants' instead of /data/highway_follow:"
+                 ' off, 0.8 or 0.8,45 (time gap s, full speed mph)')
+  p.add_argument('--highway-follow-file', default=HF_FILE, help=argparse.SUPPRESS)
   p.add_argument('--log-root', default=ROOT, help=argparse.SUPPRESS)
   p.add_argument('--op-dir', default=OP_DIR, help=argparse.SUPPRESS)
   p.add_argument('--onroad-param', default=ONROAD_PARAM, help=argparse.SUPPRESS)
@@ -1383,6 +2080,12 @@ def collect(argv=None):
       pass
   rt = setup(args.op_dir)
   np = rt.np
+  if args.highway_follow is not None:
+    hf, hf_txt, hf_from = parse_highway_follow(args.highway_follow, cli=True), args.highway_follow, '--highway-follow'
+  else:
+    (hf, hf_txt), hf_from = read_highway_follow(args.highway_follow_file), args.highway_follow_file
+  dbc = None if args.no_can else load_dbc(rt, args.op_dir)
+  want = frozenset(dbc[m][0] for m in {m for _, m, _ in CAR} if m in dbc) if dbc else frozenset()
   routes, segs = routes_on_disk(args.log_root)
   if not routes:
     raise UsageError(f'No drives found in {args.log_root}.')
@@ -1392,12 +2095,13 @@ def collect(argv=None):
     say(f'  {i} {r} segs {len(segs[r]):3d} {b[0]}@{b[1]}')
   chosen = pick_routes(args.drives, routes)
   R, steady, ovr, app, D_by_route = [], [], [], [], {}
+  sigst, cbparts = [], []
   taps = 0
   keep_drives = bool(args.detail or args.all)
   for route in chosen:
     t_start = time.time()
-    svc, info = read_route(rt, args.log_root, route, segs)
-    D = build(rt, svc, info)
+    svc, info = read_route(rt, args.log_root, route, segs, want)
+    D = build(rt, svc, info, dbc, hf)
     del svc
     head = (f"=== drive {route}  {info['branch']}@{info['commit']}  {info['segs']}/{info['nseg']} segments read"
             + (f" ({info['q_segs']} qlog only)" if info['q_segs'] else '')
@@ -1411,12 +2115,18 @@ def collect(argv=None):
     st_route = find_steady(D, pts)
     ov_route, tp = find_overrides(D, pts)
     ap_route = find_approaches(D)
+    sigst.append(signal_stats(D))
+    cbparts.append(coast_brake_points(D, ap_route))
+    if hf is not None and 'highway_follow' not in info['branch'] and D.hwy.any():
+      D.notes.append((1, f"drive {D.rid}: branch {info['branch']} may not have the highway follow: its 'code wants' assumes"
+                         f" {hf[0]:.2f} s from {hf[1]:.0f} mph ({hf_from}); --highway-follow off for the personality's T"))
     taps += tp
     modes = mode_shares(D)
     r = {'rid': D.rid, 'route': route, 'branch': info['branch'], 'commit': info['commit'], 'segs': info['segs'],
          'nseg': info['nseg'], 'q_segs': info['q_segs'], 'modes': modes, 'pers': D.pers, 't_follow': D.t_follow,
          'notes': D.notes, 'delay': info['delay'], 'op_long': info['op_long'], 'n_steady': len(st_route),
-         'n_ovr': len(ov_route), 'n_app': len(ap_route)}
+         'n_ovr': len(ov_route), 'n_app': len(ap_route), 'lag': D.lag_n * DT, 'brk_known': D.brk_known,
+         'p_src': D.sig_src.get('P', '-')}
     R.append(r)
     steady += st_route
     ovr += ov_route
@@ -1439,13 +2149,22 @@ def collect(argv=None):
     tot[key] = {'s': sum(r['modes'][key]['s'] for r in R), 'brk': sum(r['modes'][key]['brk'] for r in R),
                 'mode': [sum(r['modes'][key]['mode'][i] for r in R) for i in range(3)]}
   t_codes = sorted({r['t_follow'] for r in R})
-  rec = recommend(np, steady, t_codes[0] if len(t_codes) == 1 else T_FOLLOW['aggressive'])
+  rec = recommend(np, steady, t_codes[0] if len(t_codes) == 1 else T_FOLLOW['aggressive'], hf)
   notes = sorted({n for r in R for n in r['notes']})
+  if hf is not None:
+    notes.append((1, f"code wants: highway follow {hf[0]:.2f} s from {hf[1]:.0f} mph ({hf_from} = {hf_txt!r}; read now, not from the logs)"))
+  elif hf_txt is not None:
+    notes.append((1, f"{hf_from} = {hf_txt!r} means off: code wants = the personality's T"))
+  if args.no_can:
+    notes.append((1, 'run with --no-can: brake pressure from carState.brake, no TSK signals'))
+  elif dbc is None:
+    notes.append((0, f'vw_mqb.dbc not found under {args.op_dir}: no CAN signals (brake pressure from carState.brake)'))
   if len(t_codes) > 1:
     notes.insert(0, (0, f"the drives have different personalities ({'/'.join(sorted({r['pers'] for r in R}))}): the code's T is"
                         f" taken as {T_FOLLOW['aggressive']} s (aggressive) in the comparison"))
   return {'args': args, 'R': R, 'steady': steady, 'ovr': ovr, 'app': app, 'events': events, 'rec': rec, 'tot': tot, 'taps': taps,
-          'osum': ovr_summary(ovr), 'asum': app_summary(app), 'notes': notes, 'drives': D_by_route}
+          'osum': ovr_summary(ovr), 'asum': app_summary(app), 'notes': notes, 'drives': D_by_route, 'hf': hf,
+          'sig': pool_sigstats(sigst), 'cb': coast_brake(pool_points(cbparts)), 'lag': nmed([r['lag'] for r in R])}
 
 
 def report(ctx):
@@ -1476,6 +2195,8 @@ def report(ctx):
   else:
     say('D. No approach (closing by 2 m/s or more on a slower car) at 45+ in these drives.')
     say()
+  print_coast_brake(ctx['sig'], ctx['cb'], ctx['lag'])
+  say()
   print_recommendation(rec, ctx['osum'], ctx['asum'], R)
   if args.detail:
     ev = [e for e in events if e['n'] == args.detail]
