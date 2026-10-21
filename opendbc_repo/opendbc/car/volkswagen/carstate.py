@@ -8,6 +8,8 @@ from opendbc.car.volkswagen.values import DBC, CanBus, NetworkLocation, Transmis
 ButtonType = structs.CarState.ButtonEvent.Type
 
 
+TSK_GRADE_MAX_AGE = 500  # carstate updates (5 s at 100 Hz) without a new Motor_16: grade unknown
+
 class CarState(CarStateBase):
   def __init__(self, CP, CP_SP):
     super().__init__(CP, CP_SP)
@@ -17,6 +19,10 @@ class CarState(CarStateBase):
     self.button_states = {button.event_type: False for button in self.CCP.BUTTONS}
     self.esp_hold_confirmation = False
     self.esp_stopping = False   # ESP_21 bit 63: the ESP runs its ACC stopping procedure
+    self.tsk_grade = 0.0        # Motor_16 TSK_Steigung: the TSK's own road grade, % (+ uphill)
+    self.tsk_grade_valid = False
+    self._tsk_grade_ts = 0
+    self._tsk_grade_age = 0
     self.upscale_lead_car_signal = False
     self.eps_stock_values = False
     self.acc_type = 0
@@ -105,6 +111,7 @@ class CarState(CarStateBase):
       self.acc_type = ext_cp.vl["ACC_06"]["ACC_Typ"]
       self.esp_hold_confirmation = bool(pt_cp.vl["ESP_21"]["ESP_Haltebestaetigung"])
       self.esp_stopping = bool(pt_cp.vl["ESP_21"]["ESP_Anhaltevorgang_ACC_aktiv"])
+      self.update_tsk_grade(pt_cp)
       acc_limiter_mode = ext_cp.vl["ACC_02"]["ACC_Gesetzte_Zeitluecke"] == 0
       speed_limiter_mode = bool(pt_cp.vl["TSK_06"]["TSK_Limiter_ausgewaehlt"])
 
@@ -291,6 +298,22 @@ class CarState(CarStateBase):
     self.frame += 1
     return ret, ret_sp
 
+  def update_tsk_grade(self, pt_cp):
+    # Motor_16 (0x65F) is slow and optional: parsed without a rate check (no CAN error if it is missing). Valid with
+    # the quality bit clear, a value inside the scale (raw 0 / 255 = init / error) and a message in the last
+    # TSK_GRADE_MAX_AGE carstate updates.
+    m16 = pt_cp.vl["Motor_16"]
+    ts = pt_cp.ts_nanos["Motor_16"]["TSK_Steigung"]
+    if ts != self._tsk_grade_ts:
+      self._tsk_grade_ts = ts
+      self._tsk_grade_age = 0
+    else:
+      self._tsk_grade_age = min(self._tsk_grade_age + 1, TSK_GRADE_MAX_AGE)
+    grade = float(m16["TSK_Steigung"])
+    self.tsk_grade_valid = (ts > 0 and self._tsk_grade_age < TSK_GRADE_MAX_AGE and not m16["TSK_QBit_Steigung"] and
+                            -101.0 < grade < 101.0)
+    self.tsk_grade = grade if self.tsk_grade_valid else 0.0
+
   def update_low_speed_alert(self, v_ego: float) -> bool:
     # Low speed steer alert hysteresis logic
     if (self.CP.minSteerSpeed - 1e-3) > CarControllerParams.DEFAULT_MIN_STEER_SPEED and v_ego < (self.CP.minSteerSpeed + 1.):
@@ -327,7 +350,8 @@ class CarState(CarStateBase):
 
     if not CP.flags & VolkswagenFlags.MLB:
       pt_messages += [
-        ("Blinkmodi_02", 1)  # From J519 BCM (sent at 1Hz when no lights active, 50Hz when active)
+        ("Blinkmodi_02", 1),  # From J519 BCM (sent at 1Hz when no lights active, 50Hz when active)
+        ("Motor_16", float('nan')),  # TSK road grade, slow; optional (no rate check, see update_tsk_grade)
       ]
     if CP.flags & VolkswagenFlags.STOCK_HCA_PRESENT:
       cam_messages += [

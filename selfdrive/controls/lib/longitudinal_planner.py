@@ -175,6 +175,134 @@ class StopPlace:
     return a_target, should_stop
 
 
+# Downhill stops ("slow down, stop, roll, stop"). The VW request is vehicle accel and openpilot's VW long control is
+# pure feedforward, so on a decline whatever lets the brakes go even briefly turns into a roll: gravity adds
+# g * grade (-10 %: +0.98 m/s2) on top of the idle creep. After a stop the plan may still want to close up to its
+# stop spot (more than ST_GO_TRAVEL left, e.g. a stop that ended 6 m instead of 4 m back): openpilot leaves the
+# stopping state at a standstill with +0.1..0.2 = ACC_06 Anfahren + HMS 4, the TSK lets the brakes go, and downhill
+# the car rolls 0 -> 2+ mph in about a second before the stopping state catches it again. And the soft stop eases
+# the brake at the very end (to -0.4), which needs the TSK to compensate the whole grade at a crawl. On a decline
+# (grade from the calibrated pitch openpilot already uses for the coast model, filtered, decided while faster than
+# DS_V_DECIDE or at a standstill and held through the stop's own nose dive):
+#  - at a standstill the car does not move off to close up; only a lead that moves off (faster than ST_V_LEAD) or a
+#    plan that no longer comes to rest, for DS_GO_N updates in a row, lets it go: "slow down, stop" and that's it;
+#  - in the stopping state under DS_V_MAX the stop request never eases (it keeps the strongest request of this
+#    stop) and is at least DS_A_MIN: the soft stop still blends in at its rate, but does not let go at the end;
+#  - a request to go under DS_V_LAUNCH is capped at DS_LAUNCH_A (real -12 %: +1.3 asked -> 0 to 2.6 m/s in 1.2 s,
+#    the TSK lets the brakes go on a launch and gravity pushes too): creeping after the lead without the surge.
+# Live: /data/decline_stop holds the decline threshold in % (default DS_DEFAULT, clamped DS_LIMITS); "0" (or any
+# number <= 0) = off = origin/t2_stop_smooth exactly (with longcontrol's roll guard and the VW carcontroller's decline
+# brake, which read the same file; the carcontroller judges the grade from the TSK's own Motor_16 grade).
+DS_FILE = '/data/decline_stop'
+DS_DEFAULT = 2.5        # % downhill
+DS_LIMITS = (1.0, 10.0)
+DS_HYST = 1.0           # %: off again once the grade is DS_HYST flatter than the threshold
+DS_PERIOD = 20          # planner updates between file reads (1 s at 20 Hz)
+DS_TAU = 1.0            # s: grade filter
+DS_V_DECIDE = 2.0       # m/s: the grade decision is taken above this or at a standstill, held in between
+DS_V_MAX = 2.0          # m/s: no-easing applies under this in the stopping state
+DS_A_MIN = 0.6          # m/s2
+DS_V_LAUNCH = 1.0       # m/s: under this on a decline a request to go (launch, creep after the lead) is capped ...
+DS_LAUNCH_A = 0.6       # m/s2: ... here: the TSK lets the brakes go on a launch and gravity adds g * grade on top
+DS_V_LAUNCH_Q = 3.0     # m/s: ... and under this behind a car ahead slower than DS_V_LEAD_Q (a creeping queue that will
+DS_V_LEAD_Q = 2.0       # m/s  stop again); behind a car that drives off the cap ends at DS_V_LAUNCH (the TSK compensates
+                        # the grade above it: pulling away feels as on the flat)
+DS_GO_N = 3             # updates (0.15 s): at a standstill on a decline a lead faster than ST_V_LEAD, or a plan that
+                        # does not come to rest, for this long lets the car go (camera speed noise: single updates)
+DS_GO_AWAY_N = 6        # updates (0.3 s): ... a plan that does not come to rest (camera noise makes 0.15 s ones)
+DS_GO_NOLEAD_N = 40     # updates (2 s): ... with no car ahead seen at all a plan that does not come to rest must last
+                        # this long (a camera dropout at a standstill; a car ahead that drives off is seen moving first)
+DS_GO_HOLD_N = 30       # updates (1.5 s): once a car ahead was seen moving off at a standstill the car stays let go
+                        # this long or until it moves (camera speed noise must not take a launch back before the car
+                        # has started: stop/go chatter). Not for a plan that does not come to rest (camera noise there
+                        # would let the car close up to its stop spot: the downhill re-launch roll)
+
+
+def read_decline_stop():
+  try:
+    with open(DS_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return DS_DEFAULT
+  if len(vals) != 1 or not np.isfinite(vals[0]):
+    return DS_DEFAULT
+  if vals[0] <= 0.0:
+    return 0.0
+  return float(np.clip(vals[0], *DS_LIMITS))
+
+
+def launch_cap_speed(v_lead, has_lead):
+  return DS_V_LAUNCH_Q if (has_lead and v_lead < DS_V_LEAD_Q) else DS_V_LAUNCH
+
+
+class DeclineStop:
+  def __init__(self, dt=DT_MDL):
+    self.threshold = DS_DEFAULT
+    self.cnt = 0
+    self.grade = FirstOrderFilter(0.0, DS_TAU, dt)
+    self.grade_init = False
+    self.decline = False
+    self.lead_go = 0
+    self.away = 0
+    self.go_hold = 0
+    self.a_stop = 0.0
+
+  def update_grade(self, pitch):
+    """pitch: carControl.orientationNED[1] (rad, < 0 nose down) or None. Every planner update."""
+    if self.cnt % DS_PERIOD == 0:
+      self.threshold = read_decline_stop()
+    self.cnt += 1
+    if pitch is not None and np.isfinite(pitch):
+      g = -100.0 * math.tan(pitch)     # % downhill
+      if not self.grade_init:
+        self.grade.x = g
+        self.grade_init = True
+      self.grade.update(g)
+
+  def reset(self):
+    self.lead_go = 0
+    self.away = 0
+    self.go_hold = 0
+    self.a_stop = 0.0
+
+  def update(self, a_target, should_stop, v_ego, travel, CP, v_lead=0.0, has_lead=True):
+    """(a_target, should_stop) -> downhill ones. Call after update_grade while openpilot drives."""
+    if self.threshold <= 0.0 or not self.grade_init:
+      self.decline = False
+      self.reset()
+      return a_target, should_stop
+    if v_ego > DS_V_DECIDE or v_ego <= CP.vEgoStarting:
+      if self.grade.x >= self.threshold:
+        self.decline = True
+      elif self.grade.x < self.threshold - DS_HYST:
+        self.decline = False
+    if v_ego <= CP.vEgoStarting:
+      self.a_stop = 0.0
+      self.lead_go = self.lead_go + 1 if v_lead >= ST_V_LEAD else 0
+      self.away = 0 if np.isfinite(travel) else self.away + 1
+      away_n = DS_GO_AWAY_N if has_lead else DS_GO_NOLEAD_N
+      if self.lead_go >= DS_GO_N:
+        self.go_hold = DS_GO_HOLD_N
+      elif self.go_hold > 0:
+        self.go_hold -= 1
+      if self.decline and not should_stop and self.go_hold <= 0 and self.away < away_n:
+        should_stop = True
+      if self.decline and not should_stop:
+        a_target = min(a_target, DS_LAUNCH_A)
+      return a_target, should_stop
+    self.lead_go = 0
+    self.away = 0
+    self.go_hold = 0
+    if self.decline and not should_stop and v_ego < launch_cap_speed(v_lead, has_lead):
+      a_target = min(a_target, DS_LAUNCH_A)
+    if self.decline and should_stop and v_ego < DS_V_MAX:
+      self.a_stop = min(self.a_stop, a_target, -DS_A_MIN)
+      a_target = self.a_stop
+    else:
+      self.a_stop = 0.0
+    return a_target, should_stop
+
+
 class LongitudinalPlanner(LongitudinalPlannerSP):
   def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
@@ -185,6 +313,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.launch_boost = LaunchBoost(dt)
     self.pickup_accel = PickupAccel()
     self.stop_place = StopPlace()
+    self.decline_stop = DeclineStop(dt)
     self.allow_throttle = True
 
     self.a_desired = init_a
@@ -317,6 +446,21 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                                                            v_ego, travel, v_plan, self.CP, v_lead, d_lead)
     else:
       self.stop_place.reset()
+    # Downhill stops (see DS_* above), with or without the stop distance
+    self.decline_stop.update_grade(sm['carControl'].orientationNED[1] if len(sm['carControl'].orientationNED) == 3 else None)
+    if not reset_state and launch_boost <= 0.0:
+      l1 = sm['radarState'].leadOne
+      v_lead = float(l1.vLead) if (l1.status and np.isfinite(l1.vLead)) else 0.0
+      travel = plan_stop_travel(self.mpc.x_sol[:, 0], self.mpc.v_solution)
+      output_a_target_mpc, output_should_stop_mpc = self.decline_stop.update(output_a_target_mpc, output_should_stop_mpc,
+                                                                             v_ego, travel, self.CP, v_lead,
+                                                                             bool(l1.status))
+    else:
+      self.decline_stop.reset()
+      l1 = sm['radarState'].leadOne
+      v_cap = launch_cap_speed(float(l1.vLead) if (l1.status and np.isfinite(l1.vLead)) else 0.0, bool(l1.status))
+      if not reset_state and self.decline_stop.decline and self.decline_stop.threshold > 0.0 and v_ego < v_cap:
+        output_a_target_mpc = min(output_a_target_mpc, DS_LAUNCH_A)   # a launch boost downhill: capped too
     if self.launch_boost.mpc_behind(self.v_desired_filter.x, v_ego):
       self.v_desired_filter.x = v_ego
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration

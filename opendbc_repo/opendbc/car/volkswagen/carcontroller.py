@@ -10,6 +10,39 @@ from opendbc.car.volkswagen.values import CanBus, CarControllerParams, Volkswage
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 
+# Decline brake (MQBStandstillManager). Real hold trace, drive 350 stop #2 at -12 % (Motor_16): the early stop
+# announcement latched HMS=4 / ACC_07 Anfahren at 0.96 m/s while openpilot was still in pid asking -0.59 and ACC_06
+# did not say Anhalten; 0.04 s later the TSK wheel brake torque went 150 -> 0 for 0.3 s and took 0.7 s to come back,
+# and on the grade the car sped up 0.86 -> 1.32 m/s and needed 3 s / 2.5 m more to stop: "slow down, stop, roll,
+# stop". On the flat the same release costs 0.2-0.5 mph (event 10); downhill gravity adds g * grade. On a decline
+# (the TSK's own grade, Motor_16, at least DECLINE_FILE's threshold), from the HMS=4 latch on and while openpilot
+# does not ask to accelerate, ACC_06 says Anhalten with openpilot's own request (never positive): the state every
+# announced stop is in a moment later anyway (HMS=4 + ACC_07 Anfahren + ACC_06 Anhalten: the TSK follows the
+# request, event 10 from -0.96 s), only entered at the latch. Never in the HMS=1 announcement window (ACC_06 Anhalten
+# there dropped the TSK torque), never with the ESP's own hold (bit 53), ACC_07 / HMS untouched. Once openpilot
+# pushed harder than DECLINE_PUSH it waits DECLINE_HOLDOFF before braking with Anhalten again (a lead lost and found
+# in the last metre: with Anhalten the TSK comes down from the push at its 4 m/s3 gradient). A real launch (request
+# above DECLINE_PUSH) gets today's frames. Live: /data/decline_stop (the planner's file): the decline threshold in %
+# (default DECLINE_DEFAULT, clamped DECLINE_LIMITS), "0" = off = frames as before, bit for bit; read ~once a second.
+DECLINE_FILE = '/data/decline_stop'
+DECLINE_DEFAULT = 2.5        # % downhill
+DECLINE_LIMITS = (1.0, 10.0)
+DECLINE_HYST = 1.0           # %
+DECLINE_PERIOD = 50          # standstill manager updates between file reads (1 s at 50 Hz)
+
+
+def read_decline_threshold() -> float:
+  try:
+    with open(DECLINE_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return DECLINE_DEFAULT
+  if len(vals) != 1 or not np.isfinite(vals[0]):
+    return DECLINE_DEFAULT
+  if vals[0] <= 0.0:
+    return 0.0
+  return float(np.clip(vals[0], *DECLINE_LIMITS))
+
 
 class HCAMitigation:
   """
@@ -88,6 +121,12 @@ class MQBStandstillManager:
   ANNOUNCE_FRAMES = 20         # 0.4 s at 50 Hz: the window in front of every fault-free hold (332/333)
   RELEASE_SPEED = 1.5          # m/s: the announced stop ends once driving again; a new slowdown re-announces
   UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
+  DECLINE_PUSH = 0.3           # m/s2: a request above this is a launch / push: today's frames (see DECLINE_FILE)
+  DECLINE_HOLDOFF = 25         # frames (0.5 s at 50 Hz) after a push before the decline brake comes back
+  # At a standstill openpilot asking to go (above 0) for DECLINE_GO_FRAMES = a launch: today's frames from then on
+  # (shorter go requests = chatter: held with Anhalten)
+  DECLINE_GO_FRAMES = 15       # frames (0.3 s)
+  DECLINE_STILL_V = 0.1        # m/s (vEgoStarting)
 
   def __init__(self, CCP):
     self._CCP = CCP
@@ -100,6 +139,45 @@ class MQBStandstillManager:
     self._announce_seen = False  # ESP bit 63 seen during that announcement
     self._stop_announced = False # this stop's announcement is over (until vEgo > RELEASE_SPEED)
     self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
+    self._decl_threshold = DECLINE_DEFAULT
+    self._decl_cnt = 0
+    self._decline = False        # on a decline (Motor_16)
+    self._decl_on = False        # decline brake latched in this announced hold
+    self._decl_push = self.DECLINE_HOLDOFF   # frames since openpilot asked for more than DECLINE_PUSH
+    self._decl_go = 0            # frames openpilot asked to go from a standstill (see DECLINE_GO_FRAMES)
+
+  def _update_decline(self, CS, accel: float) -> None:
+    if self._decl_cnt % DECLINE_PERIOD == 0:
+      self._decl_threshold = read_decline_threshold()
+    self._decl_cnt += 1
+    self._decl_push = 0 if accel > self.DECLINE_PUSH else min(self._decl_push + 1, self.DECLINE_HOLDOFF)
+    if self._decl_threshold <= 0.0 or not getattr(CS, 'tsk_grade_valid', False):
+      self._decline = False
+      return
+    downhill = -float(CS.tsk_grade)
+    if downhill >= self._decl_threshold:
+      self._decline = True
+    elif downhill < self._decl_threshold - DECLINE_HYST:
+      self._decline = False
+
+  def _decline_brake(self, accel: float, stopping: bool, v: float) -> float | None:
+    """announced hold, HMS=4 latched: openpilot's request for ACC_06 with Anhalten, or None (today's bits)"""
+    if not self._decline or self._decl_push < self.DECLINE_HOLDOFF:
+      self._decl_on = False
+      self._decl_go = 0
+      return None
+    # a launch from a standstill: openpilot asking to go for DECLINE_GO_FRAMES (a lead creeping off slowly asks less
+    # than DECLINE_PUSH and would otherwise be held for as long as it creeps); go-pulses shorter than that stay held
+    if accel > 0.0 and not stopping and (v < self.DECLINE_STILL_V or self._decl_go > 0):
+      self._decl_go = min(self._decl_go + 1, self.DECLINE_GO_FRAMES)
+    else:
+      self._decl_go = 0
+    if self._decl_go >= self.DECLINE_GO_FRAMES:
+      self._decl_on = False
+      return None
+    if accel <= 0.0 or stopping:
+      self._decl_on = True
+    return min(accel, 0.0) if self._decl_on else None
 
   def update(self, CS, long_active: bool, accel: float, stopping: bool, starting: bool
              ) -> tuple[bool, float, bool, bool, bool | None, bool | None]:
@@ -132,6 +210,7 @@ class MQBStandstillManager:
 
     # Early stop announcement (see the class constants).
     v = CS.out.vEgo
+    self._update_decline(CS, accel)
     if not hms_active or v > self.RELEASE_SPEED:
       self._announce_frames = 0
       self._announce_seen = False
@@ -154,7 +233,12 @@ class MQBStandstillManager:
     # bit 53 -> the ESP handed over within 0.04 s, HMS=4 and the TSK held. The parent's State 2 does that.
     if hms_active and self._announced_hold and not CS.esp_hold_confirmation:
       self._prev_hold_confirmation = CS.esp_hold_confirmation
+      decl = self._decline_brake(accel, stopping, v)
+      if decl is not None:
+        return long_active, decl, True, False, True, False              # decline brake: ACC_06 Anhalten (see DECLINE_FILE)
       return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
+    self._decl_on = False
+    self._decl_go = 0
 
     # HMS=4 LATCH.
     # Drive data (0000022b, 5.6% grade) shows the ESP tolerates a long steady HMS=4 --

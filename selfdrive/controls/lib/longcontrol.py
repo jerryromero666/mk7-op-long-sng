@@ -33,6 +33,34 @@ SOFT_EASE_RATE = 1.0           # m/s3
 SOFT_URGENT = -1.25            # m/s2 (just past stopAccel: the soft stop tracks requests down to stopAccel)
 SOFT_MAX_T = 5.0               # s
 
+# Roll guard. Once the wheels have read 0 in the stopping state (or vEgo stayed under ROLL_STILL_V for ROLL_ARM_T),
+# any movement while openpilot still wants to be stopped (still in the stopping state: no launch, no creep decision)
+# is a roll the car did not ask for (downhill: the brakes let go; uphill: vEgo is unsigned, a rollback reads the same):
+# the request goes to ROLL_ACCEL at ROLL_RATE at once and stays there until openpilot leaves the stopping state, so
+# the car stops again within centimetres instead of rolling on at -1.2 (or at the soft stop's -0.4). A launch or a
+# creep leaves the stopping state first, so it never brakes them. Short stopping <-> pid flickers at a standstill
+# (camera noise) keep it armed for ROLL_KEEP_T. Live: on with /data/decline_stop (longitudinal_planner.py DS_*);
+# "0" there = off = origin/t2_stop_smooth exactly.
+ROLL_FILE = '/data/decline_stop'
+ROLL_V = 0.15          # m/s: wheels moving
+ROLL_STILL_V = 0.05    # m/s: standing still (when the wheels do not read exactly 0)
+ROLL_ARM_T = 0.1       # s
+ROLL_KEEP_T = 0.5      # s
+ROLL_CLEAR_V = 1.5     # m/s: driving again, disarm
+ROLL_ACCEL = -2.0      # m/s2
+ROLL_RATE = 10.0       # m/s3
+
+
+def read_roll_guard():
+  try:
+    with open(ROLL_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return True
+  if len(vals) != 1 or not np.isfinite(vals[0]):
+    return True
+  return vals[0] > 0.0
+
 
 def read_soft_stop():
   # soft stop rate in m/s3, 0.0 = off
@@ -97,9 +125,37 @@ class LongControl:
     self.soft_rate = SOFT_DEFAULT
     self.soft_cnt = 0
     self.stop_t = 0.0
+    self.roll_on = True
+    self.still_t = 0.0      # standing still in the stopping state
+    self.away_t = 0.0       # out of the stopping state since the car was armed
+    self.roll_armed = False
+    self.roll_hold = False  # a roll was caught: hold ROLL_ACCEL until the stopping state ends
 
   def reset(self):
     self.pid.reset()
+
+  def update_roll_guard(self, CS):
+    stopping = self.long_control_state == LongCtrlState.stopping
+    if not self.roll_on or self.long_control_state == LongCtrlState.off or CS.vEgo > ROLL_CLEAR_V:
+      self.roll_armed = self.roll_hold = False
+      self.still_t = self.away_t = 0.0
+      return
+    if not stopping:
+      self.roll_hold = False
+      self.still_t = 0.0
+      self.away_t += DT_CTRL
+      if self.away_t > ROLL_KEEP_T:
+        self.roll_armed = False
+      return
+    self.away_t = 0.0
+    if CS.standstill:
+      self.roll_armed = True        # the wheels read 0
+    elif CS.vEgo < ROLL_STILL_V:
+      self.still_t += DT_CTRL
+      if self.still_t >= ROLL_ARM_T:
+        self.roll_armed = True
+    else:
+      self.still_t = 0.0
 
   def update(self, active, CS, a_target, should_stop, accel_limits):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
@@ -108,6 +164,7 @@ class LongControl:
 
     if self.soft_cnt % SOFT_PERIOD == 0:
       self.soft_rate = read_soft_stop()
+      self.roll_on = read_roll_guard()
     self.soft_cnt += 1
 
     self.long_control_state = long_control_state_trans(self.CP, self.CP_SP, active, self.long_control_state, CS.vEgo,
@@ -115,6 +172,7 @@ class LongControl:
                                                        CS.cruiseState.standstill)
     if self.long_control_state != LongCtrlState.stopping:
       self.stop_t = 0.0
+    self.update_roll_guard(CS)
     if self.long_control_state == LongCtrlState.off:
       self.reset()
       output_accel = 0.
@@ -138,6 +196,11 @@ class LongControl:
       elif output_accel > self.CP.stopAccel:
         output_accel = min(output_accel, 0.0)
         output_accel -= self.CP.stoppingDecelRate * DT_CTRL
+      if self.roll_armed and CS.vEgo > ROLL_V:
+        self.roll_hold = True
+      if self.roll_hold:
+        # roll guard (see ROLL_* above)
+        output_accel = min(output_accel, max(min(self.last_output_accel, 0.0) - ROLL_RATE * DT_CTRL, ROLL_ACCEL))
       self.reset()
 
     elif self.long_control_state == LongCtrlState.starting:
