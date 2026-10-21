@@ -89,8 +89,10 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
 # 0.5 m/s), the lead obstacle is shifted forward (the car settles that much closer) and
 # t_follow is shortened, but never so far that the wanted gap drops under a stopping-distance
 # floor: if the lead brakes at CF_A_LEAD, this car reacts after CF_T_REACT and brakes at CF_A_EGO,
-# it still stops CF_D_MIN behind. The floor grows with speed, so the effect is largest at
-# 5-15 mph and gone by about 25 mph (aggressive). When the lead slows it goes back fast, so stops
+# it still stops CF_D_MIN behind. With both braking alike (as the MPC itself assumes) the floor at the
+# lead's speed is CF_D_MIN + CF_T_REACT * v, so the closer gap holds through the whole 5-40 mph pickup
+# (it used CF_A_LEAD 5.0, which ended it by about 20 mph: drives 353-355 pickups held back by a car
+# 15-30 m ahead pulling away). When the lead slows it goes back fast, so stops
 # keep the gap. leadTwo is usually the same car: both obstacles move, by the smaller of the two.
 # Live: /data/close_follow holds "<stop gap cut m> <t_follow s>" (default "3.0 0.9"; "0 1.75" = off).
 CF_DEFAULT = (3.0, 0.9)
@@ -102,7 +104,7 @@ CF_CLOSING_V = [-2.0, -0.5]  # m/s lead speed minus this car's: none .. full
 CF_SOLVER_STOP_DISTANCE = 6.0  # compiled into c_generated_code (STOP_DISTANCE above is not)
 CF_T_REACT = 1.0             # s: floor reaction time
 CF_A_EGO = 3.0               # m/s2: floor braking of this car
-CF_A_LEAD = 5.0              # m/s2: floor braking of the lead
+CF_A_LEAD = 3.0              # m/s2: floor braking of the lead (same as this car's)
 CF_D_MIN = 2.5               # m: floor gap left when both have stopped
 CF_SHIFT_IN = 0.05           # m per update toward closer (1 m/s)
 CF_SHIFT_OUT = 0.25          # m per update back (5 m/s)
