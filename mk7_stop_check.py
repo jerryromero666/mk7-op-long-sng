@@ -71,6 +71,31 @@ WHAT IT LOOKS AT
                       0.1 s in m/s3) and the wheels after it (steepest build-up m/s3 = the bump, strongest braking)
     Per branch: counts and medians of these; the BOTTOM LINE says what made the 'slight roll' (planner tail vs TSK release
     under HMS 4) and the bump (the stopping snap), with numbers.
+    (v1.3) 'tsk-release' must last 0.1 s or longer: a single 20 ms frame of TSK 0.0 at the HMS 4 latch is not counted.
+ E. (v1.3) Hills and the roll after the stop (the driver: 'on a decline it does slow down, stop, roll, stop'):
+      grade           Motor_16 TSK_Steigung (%, minus = downhill; frames with TSK_QBit_Steigung set or raw 0 / 255 are
+                      invalid), the median over the last 3 s before the first stop and the value at it; decline = under -3 %
+      first stop      a stop is counted from the first moment the car stood (vEgo under 0.1 m/s, even for only 0.04 s)
+                      when it rolled into the stop from there: every number of the stop is then about that first stop
+      roll            three kinds, each with openpilot on, no gas and openpilot not starting (not its starting state,
+                      not asking more than +0.05 for 0.2 s or longer; shorter go requests are counted as chatter, real
+                      drive 350 stop #1), at least 0.1 m and 0.2 m/s:
+                        slow  the car slowed to under 1.5 m/s, then sped up again by 0.15 m/s or more while openpilot asked
+                              to brake (real drive 350 stop #2 on -12 %: 0.85 -> 1.32 m/s after the HMS 4 latch let the TSK
+                              go; it never stood): the lowest speed, when, the peak, metres from there to the stop
+                        stop  the wheels moved again within 5 s of standing
+                        held  the wheels moved again later while openpilot still held the car in its stopping state
+                      when it began, how far it rolled (m, from the ESP_19 wheel speeds), the peak speed, when it stopped
+                      again (the second stop; a re-stop after it is part of the same stop, never a stop of its own), what
+                      openpilot asked (carControl accel, its state), the TSK target (Motor_20), the TSK braking bit (ESP_05
+                      bit 27, ESP_Verz_TSK_aktiv: share of the roll it was on), the brake pressure (ESP_05, bar) before and
+                      during it, the ESP hold (ESP_21 bit 53), ACC_07 HMS and ACC_06 Anhalten / ACC_07 Anfahren, openpilot's
+                      go-pulses under 0.2 s, and whether the driver braked
+      soft stop       the stopping state's request from pid -> stopping to the first stop (t2_stop_smooth eases it): the
+                      strongest request, the request at the moment of stopping, the most it eased back after its strongest,
+                      its steepest change (m/s3: about -6 = the stock snap to -1.2, about -1.5 = the soft stop), and the
+                      wheels' decel at the stop (mean of the last 0.3 s) and their strongest in the stopping state
+    Per branch: stops on declines, how many rolled (slow / stop / held), metres rolled; the soft stop's medians.
 Only reads logs. Writes nothing. Exit codes: 0 = report printed, 1 = no openpilot stop and no brake press found, 2 = problem.
 """
 import sys
@@ -84,7 +109,7 @@ import re        # noqa: E402
 import statistics as st  # noqa: E402
 import time      # noqa: E402
 
-TOOL_VERSION = '1.2 (2026-10-18)'
+TOOL_VERSION = '1.3.1 (2026-10-21)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
@@ -134,6 +159,29 @@ REL_WHL = 0.1          # ... or the wheels at or above this after RESP_S of brak
 TAIL_WEAK = -0.6       # m/s2: the request weaker than this between the peak and the stopping state = the planner's tail
 TAIL_MIN_S = 0.5       # s: a tail at least this long is counted
 SNAP_RATE_S = 0.1      # s: the snap's rate = the steepest change of the request over this long
+REL_MIN_S = 0.1        # s: (v1.3) a tsk-release must last at least this long (one 20 ms frame of TSK 0.0 is not one)
+# ---- v1.3: hills, the roll after the first stop, the soft stop
+GRADE_DECL = -3.0      # %: grade under this at the stop = on a decline (over +3 % = uphill)
+GRADE_S = 3.0          # s: the grade's median over this long before the first stop
+GRADE_STALE = 5.0      # s: Motor_16 comes about once a second: its last value holds this long
+SLOW_GAP = 2.5         # s: Motor_16 frames with a neighbour this close are a real signal (not a qlog leftover)
+RA_WIN_S = 5.0         # s: the wheels moving again within this after a stop (openpilot on, no gas, not starting) = a roll
+RA_MIN_M = 0.10        # m: ... at least this far ...
+RA_PEAK_V = 0.20       # m/s: ... and at least this fast (a car hovering at the 0.1 m/s line is not a roll)
+RA_OP_GO = 0.05        # m/s2: openpilot asking more than this (or in its starting state) moved the car: a launch
+RA_MAX_S = 10.0        # s: a roll is followed at most this long
+RA_GO_LEAD_M = 1.0     # m: (v1.3.1) openpilot moving off again after a stop toward a car ahead that moved less than this,
+                       # staying under CREEP_TOP and stopping again within RA_MAX_S = a 'go' roll (t2_stop_smooth closes
+                       # up to its stop spot: the TSK lets the brakes go at a standstill launch and downhill the car rolls)
+TOUCH_S = 0.04         # s: a first stop shorter than 0.5 s counts when the car stood at least this long
+RA_GO_S = 0.2          # s: openpilot asking to go counts as a launch only when it lasts this long (shorter = chatter:
+                       # real drive 350 stop #1, shouldStop flickered and 1-frame +0.12 / Anfahren pulses dropped the brakes)
+RS_SLOW_V = 1.5        # m/s: a 'slow' roll: slowing to under this (but not to a stop) ...
+RS_RISE = 0.15         # m/s: ... then the speed rose again by this much with openpilot asking to brake (real drive 350
+                       # stop #2, -12 %: 0.85 -> 1.32 m/s after the HMS 4 latch let the TSK go, 3 s / 2.5 m more to stop)
+RS_BACK_S = 10.0       # s: looked for this far before the stop
+RS_ASK = -0.1          # m/s2: ... and openpilot asked this much braking or more on average while the speed rose
+SOFT_RATE = -3.0       # m/s3: the stopping state's steepest change gentler than this (with a ramp) = soft stop
 LABELS = ['smooth', 'late-hard', 'hard-release-grab', 'hard-into-stopping', 'hard-eased', 'creep']
 LABEL_SHORT = {'smooth': 'sm', 'late-hard': 'lh', 'hard-release-grab': 'rg', 'hard-into-stopping': 'is',
                'hard-eased': 'he', 'creep': 'cr', '?': '?'}
@@ -183,8 +231,14 @@ CAR = [
   ('tsk_target', 'Motor_20', 'TSK_a_Soll_gradientenbegrenzt'),
   ('hold53', 'ESP_21', 'ESP_Haltebestaetigung'),
   ('esp63', 'ESP_21', 'ESP_Anhaltevorgang_ACC_aktiv'),
+  ('grade', 'Motor_16', 'TSK_Steigung'),          # v1.3: %, minus = downhill
+  ('grade_q', 'Motor_16', 'TSK_QBit_Steigung'),   # 1 = the grade is not valid
+  ('verz', 'ESP_05', 'ESP_Verz_TSK_aktiv'),       # bit 27: the ESP brakes for the TSK
+  ('bar', 'ESP_05', 'ESP_Bremsdruck'),            # brake pressure, bar
+  ('esp_drv', 'ESP_05', 'ESP_Fahrer_bremst'),     # the driver brakes (ESP's view)
 ]
-VALID = {'ws_fl': (0.0, 400.0), 'ws_fr': (0.0, 400.0), 'ws_rl': (0.0, 400.0), 'ws_rr': (0.0, 400.0)}
+VALID = {'ws_fl': (0.0, 400.0), 'ws_fr': (0.0, 400.0), 'ws_rl': (0.0, 400.0), 'ws_rr': (0.0, 400.0),
+         'grade': (-40.0, 40.0), 'bar': (-5.0, 260.0)}
 # key, message, signal (comma -> car: the panda's echo of what went out, else sendcan)
 OP = [
   ('sent', 'ACC_06', 'ACC_Sollbeschleunigung_02'),
@@ -197,7 +251,8 @@ OP = [
 OP_MSGS = ('ACC_06', 'ACC_07')
 MISSING_TXT = {'ESP_19': 'wheel speeds (the carState.vEgo slope is used)', 'Motor_20': 'TSK target',
                'ESP_21': 'ESP hold confirmation (bit 53) / ACC stopping procedure (bit 63)',
-               'ACC_06': 'ACC_06 as sent (carControl accel is used)', 'ACC_07': 'ACC_07 HMS / Anhalten'}
+               'ACC_06': 'ACC_06 as sent (carControl accel is used)', 'ACC_07': 'ACC_07 HMS / Anhalten',
+               'Motor_16': 'grade (TSK_Steigung)', 'ESP_05': 'brake pressure / TSK braking bit 27 (ESP_05)'}
 DENSE_GAP = 0.25       # s: a CAN frame with no neighbour this close is a qlog leftover, not a signal (dropped)
 
 
@@ -665,13 +720,13 @@ def isnum(x):
   return x is not None and x == x and not (isinstance(x, float) and math.isinf(x))
 
 
-def dense(np, x):
+def dense(np, x, gap=DENSE_GAP):
   """(t, words) without isolated frames: qlogs keep 1 CAN message in thousands, too few to follow a signal."""
   t, d = x
   if len(t) < 3:
     return t[:0], d[:0]
   g = np.diff(t)
-  keep = np.concatenate([[False], g <= DENSE_GAP]) | np.concatenate([g <= DENSE_GAP, [False]])
+  keep = np.concatenate([[False], g <= gap]) | np.concatenate([g <= gap, [False]])
   return (t, d) if keep.all() else (t[keep], d[keep])
 
 
@@ -734,9 +789,10 @@ def build(rt, dbc, can, svc, info):
     return None, None
 
   car_src = {k for k in can if k[0] == 'can' and k[2] < 4}
+  a16 = addr.get('Motor_16')
   for k in list(can):      # signals only from the dense parts (rlog); blocked frames (src 192+) are kept as they are
     if k[0] == 'sendcan' or k[2] < 192:
-      can[k] = dense(np, can[k])
+      can[k] = dense(np, can[k], SLOW_GAP if k[1] == a16 else DENSE_GAP)   # Motor_16 comes about once a second
   D.c, D.srcs = {}, {}
   for key, msg, sname in CAR:
     k, x = pick(msg, car_src)
@@ -744,12 +800,18 @@ def build(rt, dbc, can, svc, info):
     if x is None or s is None or len(x[0]) < 10:
       D.c[key] = (np.zeros(0), np.zeros(0))
       continue
-    _, val = decode(np, x[1], s)
+    raw, val = decode(np, x[1], s)
+    if key == 'grade':
+      val[(raw == 0) | (raw == 255)] = NAN       # no value / error
     if key in VALID:
       lo, hi = VALID[key]
       val[(val < lo) | (val > hi)] = NAN
     D.c[key] = (x[0], val)
     D.srcs[msg] = f'bus {k[2]}'
+  gt, gv = D.c['grade']
+  if len(gt) and len(D.c['grade_q'][0]):      # the quality bit set = not a valid grade
+    gv = np.where(hold(np, *D.c['grade_q'], gt, stale=GRADE_STALE, cap=GRADE_STALE) > 0.5, NAN, gv)
+    D.c['grade'] = (gt, gv)
   # what OP sent: the panda's echo of the frames that went out (same clock as the car's frames), else sendcan
   D.blocked = []      # (t, message, accel in the blocked frame)
   for msg in OP_MSGS:
@@ -802,8 +864,10 @@ def build(rt, dbc, can, svc, info):
     tw = ws[0][0]
     vw = np.mean([np.interp(tw, w[0], w[1]) for w in ws], axis=0) / 3.6
     D.g_t, D.a_whl = slope_grid(np, tw, vw)
+    D.ws_t, D.ws_v = tw, vw         # v1.3: metres rolled after a stop come from the wheel speeds
   else:
     D.g_t, D.a_whl = np.zeros(0), np.zeros(0)
+    D.ws_t, D.ws_v = np.zeros(0), np.zeros(0)
   D.gv_t, D.a_v = slope_grid(np, D.cs_t, D.v)
   # personality (the MPC's follow time)
   pers = [int(x) for x in D.ss_pers[D.ss_en] if x >= 0] if len(D.ss_t) else []
@@ -881,8 +945,10 @@ class Win:
     av = grid_interp(np, D.gv_t, D.a_v, G, gap=0.1) if len(D.gv_t) else np.full(len(G), NAN)
     self.whl_src_v = ~np.isfinite(whl) & np.isfinite(av)
     self.whl = np.where(np.isfinite(whl), whl, av)
-    for key in ('hms', 'a06_stop', 'a06_go', 'a07_stop', 'hold53', 'esp63'):
+    for key in ('hms', 'a06_stop', 'a06_go', 'a07_stop', 'a07_go', 'hold53', 'esp63', 'verz', 'bar', 'esp_drv'):
       setattr(self, key, hold(np, *D.c[key], G, stale=0.2))
+    self.grade = hold(np, *D.c['grade'], G, stale=GRADE_STALE, cap=GRADE_STALE)
+    self.ws = grid_interp(np, D.ws_t, D.ws_v, G) if len(D.ws_t) else np.full(len(G), NAN)
     bt = np.array([b[0] for b in D.blocked if b[1] == 'ACC_06'])
     self.blk = (np.histogram(bt, bins=np.append(G - DT / 2, G[-1] + DT / 2))[0] if len(bt) and len(G)
                 else np.zeros(len(G), dtype=np.int64))
@@ -1064,12 +1130,16 @@ def label_of(sh, mean_decel, into):
   return 'smooth'
 
 
-def analyse_stop(D, t_still, t_still_end, prev_end):
+def analyse_stop(D, t_still, t_still_end, prev_end, nxt=()):
   np = D.np
   t_lo = max(t_still - LOOK_BACK_S, prev_end + 0.1)
   if t_still - t_lo < 1.0:
     t_lo = t_still - 1.0
-  W = Win(D, t_lo, t_still + AFTER_S)
+  # v1.3: when the car moved again within RA_WIN_S, the window reaches far enough to follow a roll to its next stop
+  t_hi = t_still + AFTER_S
+  if t_still_end - t_still <= RA_WIN_S:
+    t_hi = max(t_hi, t_still_end + RA_MAX_S + 1.0)
+  W = Win(D, t_lo, t_hi)
   G = W.G
   ks = W.k(t_still)
   s = {'kind': 'stop', 't': t_still, 't_end': t_still_end, 'route': D.route, 'rid': rid(D.route),
@@ -1187,7 +1257,12 @@ def analyse_stop(D, t_still, t_still_end, prev_end):
   s['has_hms'] = len(c['hms'][0]) > 0
   s['has_esp21'] = len(c['hold53'][0]) > 0
   s['whl_v'] = bool(W.whl_src_v[max(ks - n1, 0):ks + 1].any())
+  roll_after(np, D, s, t_still, t_still_end, nxt)
+  slow_roll(np, W, s, k0, ks)
+  hold_chatter(np, D, s, t_still, t_still_end)
   stop_end(np, W, s, k0, ks, kst, jw, h_lo)
+  grade_at(np, D, s)
+  soft_stop(np, W, s)
   W.compact()
   return s
 
@@ -1197,6 +1272,15 @@ def steady(np, mask, n):
   """True where mask has been True for the last n samples (this one included)."""
   c = np.convolve(mask.astype(np.int32), np.ones(max(n, 1), dtype=np.int32), mode='full')[:len(mask)]
   return c >= max(n, 1)
+
+
+def lasting(np, mask, n):
+  """mask with only its True runs of at least n samples kept."""
+  out = np.zeros(len(mask), dtype=bool)
+  for a, b in runs_of(np, mask):
+    if b - a >= n:
+      out[a:b] = True
+  return out
 
 
 def after_any(np, mask, n):
@@ -1255,6 +1339,10 @@ def stop_end(np, W, s, k0, ks, kst, jw, h_lo):
     rel_t = m_any & steady(np, ask, n_tsk) & (W.tsk >= REL_TSK)
     st_resp = steady(np, ask, n_resp)
     rel_w = after_any(np, hms4 & roll & rng, n_resp) & roll & rng & st_resp & (W.whl >= REL_WHL)
+  # v1.3: only a release that lasts REL_MIN_S counts (real drives 343-347: the TSK target read exactly 0.0 for one frame
+  # at the HMS 4 latch with ACC_06 Anhalten on, no speed rise: not a release)
+  n_rel = max(int(round(REL_MIN_S / DT)), 1)
+  rel_t, rel_w = lasting(np, rel_t, n_rel), lasting(np, rel_w, n_rel)
   kr = np.flatnonzero(rel_t | rel_w)
   runs = [(a, b) for a, b in runs_of(np, m_win) if (b - a) * DT >= WIN_MIN_S - 1e-9]
   s['win_n'] = len(runs)
@@ -1340,20 +1428,304 @@ def stop_end(np, W, s, k0, ks, kst, jw, h_lo):
       s['snap_wmin'], s['snap_wmin_t'] = float(W.whl[kst + kw]), float(G[kst + kw] - G[kst])
 
 
+# ============================================================================================ E. hills, the roll after the stop (v1.3)
+DUR_KEYS = {'op_min': NAN, 'op_max': NAN, 'lcs': '', 'tsk0': NAN, 'tsk': NAN, 'verz0': NAN, 'verz': NAN, 'bar0': NAN,
+            'bar': NAN, 'h53': NAN, 'hms': '', 'anh': NAN, 'go': NAN, 'drv': NAN, 'drv_v': NAN, 'blip': 0}
+RA_KEYS = dict({'ra': False, 'ra_kind': '', 'ra_first_dur': NAN, 'ra_n': 0, 'ra_t': NAN, 'ra_t2': NAN, 'ra_tend': NAN,
+                'ra_d1': NAN, 'ra_dist': 0.0, 'ra_vmax': NAN, 'ra_amax': NAN, 'ra_end': '', 'ra_consumed': None,
+                'ra_gap': NAN, 'ra_whl_v': False}, **{'ra_' + k: v for k, v in DUR_KEYS.items()})
+RS_KEYS = dict({'rs': False, 'rs_vmin': NAN, 'rs_t': NAN, 'rs_vmax': NAN, 'rs_rise': NAN, 'rs_dist': 0.0, 'rs_dur': NAN,
+                'rs_amax': NAN}, **{'rs_' + k: v for k, v in DUR_KEYS.items()})
+SS_KEYS = {'ss_kind': '', 'ss_t': NAN, 'ss_from': NAN, 'ss_min': NAN, 'ss_at': NAN, 'ss_ease': NAN, 'ss_rate': NAN,
+           'ss_dur': NAN, 'ss_whl': NAN, 'ss_whl_at': NAN}
+
+
+def seq_vals(x):
+  """The values a small integer signal took, in order, repeats dropped."""
+  v = [int(a) for a in x if a == a]
+  return [a for i, a in enumerate(v) if i == 0 or a != v[i - 1]]
+
+
+def seq_txt(x, names=None):
+  """'1>4>3' (at most 6 steps)."""
+  v = seq_vals(x)
+  return '>'.join(str(names.get(a, '?') if names else a) for a in v[:6]) + ('..' if len(v) > 6 else '')
+
+
+def frac_on(np, x):
+  f = fin(x)
+  return float(np.mean(f > 0.5)) if len(f) else NAN
+
+
+def during(np, W, R, M, a1, k_from, k_to):
+  """What openpilot, the TSK, the ESP and the driver did while the car rolled (grid mask M; 'before' = just before a1;
+  HMS, hold and the driver over k_from..k_to)."""
+  n02 = R.n02
+  r = {'op_min': nmin(W.out[M]), 'op_max': nmax(W.out[M]), 'lcs': seq_txt(W.lcs[M], LCS_SHORT),
+       'tsk0': float(W.tsk[max(a1 - 1, 0)]), 'tsk': nmax(W.tsk[M]), 'verz0': float(W.verz[max(a1 - 1, 0)]),
+       'verz': frac_on(np, W.verz[M]), 'bar0': nmean(W.bar[max(a1 - n02, 0):max(a1, 1)]), 'bar': nmin(W.bar[M]),
+       'h53': nmax(W.hold53[k_from:k_to + 1]), 'hms': seq_txt(W.hms[k_from:k_to + 1]), 'anh': frac_on(np, W.a06_stop[M]),
+       'go': frac_on(np, W.a07_go[M]), 'drv': NAN, 'drv_v': NAN,
+       'blip': len(runs_of(np, R.blip[max(k_from - n02, 0):k_to + 1]))}
+  with np.errstate(invalid='ignore'):
+    db = np.flatnonzero(W.brk[k_from:k_to + n02 + 1] | (W.esp_drv[k_from:k_to + n02 + 1] > 0.5))
+  if len(db):
+    r['drv'], r['drv_v'] = float(W.G[k_from + db[0]] - W.G[k_from]), float(W.v[k_from + db[0]])
+  return r
+
+
+class RollTools:
+  """What the roll detection needs on a window: speed for distance, 'openpilot moved the car', rest runs."""
+
+  def __init__(self, np, W):
+    self.W, self.np = W, np
+    self.n02, self.n03 = int(round(0.2 / DT)), int(round(0.3 / DT))
+    with np.errstate(invalid='ignore'):
+      self.still = np.isfinite(W.v) & (W.v < STILL_V)
+      opgo = (W.lcs == 3) | (np.isfinite(W.out) & (W.out > RA_OP_GO))
+    launch = lasting(np, opgo, max(int(round(RA_GO_S / DT)), 1))
+    self.go = W.gas | launch               # the driver's gas, or openpilot asking to go for RA_GO_S or longer
+    self.blip = opgo & ~launch             # openpilot asking to go for less than that: chatter
+    self.spd = np.where(np.isfinite(W.ws), W.ws, W.v)
+
+  def moved(self, a, b):
+    """(m from the wheel speeds, peak vEgo m/s) over grid [a, b)."""
+    if b <= a:
+      return 0.0, NAN
+    return float(np.nansum(self.spd[a:b])) * DT, nmax(self.W.v[a:b])
+
+  def starts_roll(self, a):
+    """Moving from grid index a on with openpilot on, no gas and openpilot not starting."""
+    W, n02 = self.W, self.n02
+    return bool(W.long[max(a - n02, 0):a + 1].all()) and not self.go[max(a - n02, 0):min(a + self.n03, len(W.G) - 1) + 1].any()
+
+
+def first_touch(D, t_still, prev_end):
+  """A stop shorter than STILL_S (the car stood TOUCH_S or longer) before the stop at t_still, after which the car rolled
+  into it with openpilot on, no gas and openpilot not starting: (start, end) of the earliest one in such a chain, else
+  None. The stop is then counted from there ('slow down, stop, roll, stop')."""
+  np = D.np
+  lo = max(prev_end + 0.1, t_still - RA_MAX_S)
+  if t_still - lo < 0.3:
+    return None
+  W = Win(D, lo, t_still + DT)
+  R = RollTools(np, W)
+  ks = W.k(t_still)
+  n_touch = max(int(round(TOUCH_S / DT)), 1)
+  first, out = ks, None
+  for a, b in reversed([(a, b) for a, b in runs_of(np, R.still[:ks]) if b - a >= n_touch]):
+    if b >= first:           # (the interpolated speed reached the line just before this stop: part of it)
+      first = min(first, a)
+      continue
+    d, pk = R.moved(b, first)
+    if a > 0 and R.starts_roll(b) and not R.go[b:first].any() and d >= RA_MIN_M and pk >= RA_PEAK_V:
+      first, out = a, (float(W.G[a]), float(W.G[b]))
+    else:
+      break
+  return out
+
+
+def roll_after(np, D, s, t_still, t_still_end, nxt):
+  """The wheels moving again after the stop (E in the header): within RA_WIN_S of it ('stop'), or later while openpilot
+  still held the car in its stopping state ('held'); a re-stop after the roll (up to 3 times) is part of this stop:
+  first stop, roll, second stop (, roll, ...). Its own window: from just before the car moved to RA_MAX_S after."""
+  s.update(RA_KEYS)
+  W = Win(D, max(t_still, t_still_end - 2.0) - 0.5, t_still_end + RA_MAX_S + 1.0)
+  G = W.G
+  ks = W.k(t_still)
+  R = RollTools(np, W)
+  moved, starts_roll, go, n02, n03 = R.moved, R.starts_roll, R.go, R.n02, R.n03
+  s['ra_whl_v'] = not bool(np.isfinite(W.ws).any())
+  moves = []
+  first = ks
+  cur, end, consumed, kind = (t_still, t_still_end), '', None, ''
+  for i in range(4):
+    a = W.k(cur[1])
+    late = cur[1] - cur[0] > RA_WIN_S
+    if late and not (W.lcs[max(a - 5 * n02, 0):a + 1] == 2).any():   # long after the stop: only while openpilot held it
+      break
+    if a >= len(G) - 2:
+      break
+    r = nxt[i] if i < len(nxt) else None
+    t_lim = cur[1] + RA_MAX_S
+    b_rest = W.k(r[0]) if r is not None and r[0] <= t_lim else None
+    if not starts_roll(a):
+      if i == 0 and b_rest is not None and relaunch(np, W, R, a, b_rest):
+        moves.append((a, b_rest))
+        kind, consumed, end = 'go', r[0], 'stop'
+      break
+    kind = kind or ('held' if late else 'stop')
+    b_lim = b_rest if b_rest is not None else W.k(t_lim)
+    g = np.flatnonzero(go[a + n03 + 1:b_lim]) if b_lim > a + n03 + 1 else []
+    b = a + n03 + 1 + int(g[0]) if len(g) else b_lim
+    d, pk = moved(a, b)
+    if d < RA_MIN_M or not pk >= RA_PEAK_V:
+      break
+    moves.append((a, b))
+    if len(g):
+      end = 'gas' if W.gas[b] else 'op'
+      break
+    if b_rest is None:
+      end = 'open'
+      break
+    consumed, cur, end = r[0], (r[0], r[1]), 'stop'
+  if not moves:
+    return
+  a1, b1 = moves[0]
+  ke = moves[-1][1]
+  M = np.zeros(len(G), dtype=bool)
+  for a, b in moves:
+    M[a:b] = True
+  s.update({'ra': True, 'ra_kind': kind, 'ra_first_dur': t_still_end - t_still, 'ra_n': len(moves),
+            'ra_t': float(G[a1]) - t_still, 'ra_t2': float(G[b1]) - t_still, 'ra_tend': float(G[ke]) - t_still,
+            'ra_d1': moved(a1, b1)[0], 'ra_dist': sum(moved(a, b)[0] for a, b in moves), 'ra_vmax': nmax(W.v[M]),
+            'ra_amax': nmax(W.whl[M]), 'ra_end': end or 'stop', 'ra_consumed': consumed})
+  dur = during(np, W, R, M, a1, first, ke)
+  if isnum(dur['drv']):
+    dur['drv'] += float(G[first]) - t_still       # (s after the first stop; the window may start later)
+  s.update({'ra_' + k: v for k, v in dur.items()})
+  kg = W.k(float(G[ke]) + 0.5)
+  s['ra_gap'] = float(W.d[kg]) if W.d[kg] == W.d[kg] else NAN
+
+
+def relaunch(np, W, R, a, b):
+  """(v1.3.1) openpilot moved the car off again (its own go request) between grid a (the wheels move) and b (the next
+  stop) although the car ahead moved less than RA_GO_LEAD_M: long control on, no gas, under CREEP_TOP, the car ahead seen
+  at both ends, at least RA_MIN_M / RA_PEAK_V (t2_stop_smooth's close-up launch; a queue that moves is not one)"""
+  n02 = R.n02
+  if b <= a + 1 or not W.long[max(a - n02, 0):b + 1].all() or W.gas[max(a - n02, 0):b + 1].any():
+    return False
+  d, pk = R.moved(a, b)
+  if d < RA_MIN_M or not pk >= RA_PEAK_V or not pk < CREEP_TOP:
+    return False
+  da, db = W.d[max(a - 1, 0)], W.d[min(b + R.n03, len(W.G) - 1)]
+  if not (isnum(da) and isnum(db)):
+    return False
+  return bool(db + d - da < RA_GO_LEAD_M)
+
+
+def slow_roll(np, W, s, k0, ks):
+  """A 'slow' roll before the stop: the car slowed to under RS_SLOW_V, then sped up again by RS_RISE or more with
+  openpilot on asking to brake (RS_ASK or more on average; no gas, openpilot not asking to go for RA_GO_S): the near-stop,
+  the peak after it, metres from the near-stop to the stop and what happened meanwhile."""
+  s.update(RS_KEYS)
+  R = RollTools(np, W)
+  G = W.G
+  lo = max(ks - int(round(RS_BACK_S / DT)), k0 if k0 is not None else 0, 0)
+  while ks - lo >= 10:
+    v = np.where(np.isfinite(W.v[lo:ks + 1]), W.v[lo:ks + 1], np.inf)
+    runmin = np.minimum.accumulate(v)
+    with np.errstate(invalid='ignore'):
+      cand = np.flatnonzero((runmin < RS_SLOW_V) & (v - runmin >= RS_RISE) & np.isfinite(v))
+    if not len(cand):
+      return
+    c = int(cand[0])
+    km = lo + int(np.argmin(v[:c + 1]))
+    kp = km + nargmax(W.v[km:ks + 1])
+    if not R.go[km:kp + 1].any() and W.long[km:kp + 1].all() and nmean(W.out[km:kp + 1]) <= RS_ASK:
+      break
+    lo = kp + 1                     # openpilot (or the driver) asked for that one: look on after it
+  else:
+    return
+  M = np.zeros(len(G), dtype=bool)
+  M[km:kp + 1] = True
+  s.update({'rs': True, 'rs_vmin': float(W.v[km]), 'rs_t': float(G[km] - G[ks]), 'rs_vmax': float(W.v[kp]),
+            'rs_rise': float(W.v[kp] - W.v[km]), 'rs_dist': R.moved(km, ks)[0], 'rs_dur': float(G[ks] - G[km]),
+            'rs_amax': nmax(W.whl[km:kp + 1])})
+  # ('before' = 0.5 s before the lowest speed: the TSK lets go a moment before the car stops slowing)
+  s.update({'rs_' + k: v for k, v in during(np, W, R, M, max(km - int(round(0.5 / DT)), 1), km, ks).items()})
+
+
+def hold_chatter(np, D, s, t_still, t_still_end):
+  """openpilot asking to go for less than RA_GO_S while the car stood (the last 60 s of the stop): each such pulse can drop
+  the TSK's brake torque (real drive 350 stop #1)."""
+  t1 = t_still_end + 0.3
+  W = Win(D, max(t_still, t1 - 60.0), t1)
+  s['hold_blip'] = len(runs_of(np, RollTools(np, W).blip))
+
+
+def grade_at(np, D, s):
+  """Motor_16 TSK_Steigung at the first stop (its last frame up to 5 s old; nan when that frame was not valid) and its
+  median over the 3 s before it (valid frames only)."""
+  s['grade'] = s['grade3'] = NAN
+  s['grade_bad'] = s['decl'] = s['incl'] = False
+  gt, gv = D.c['grade']
+  s['has_grade'] = len(gt) > 0
+  if not len(gt):
+    return
+  t1 = s['t']
+  i = int(np.searchsorted(gt, t1, side='right')) - 1
+  if i >= 0 and t1 - gt[i] <= GRADE_STALE:
+    s['grade'] = float(gv[i])
+    s['grade_bad'] = not isnum(s['grade'])
+  m = (gt >= t1 - GRADE_S) & (gt <= t1) & np.isfinite(gv)
+  if m.any():
+    s['grade3'] = float(np.median(gv[m]))
+  g = s['grade'] if isnum(s['grade']) else s['grade3']
+  s['decl'] = isnum(g) and g < GRADE_DECL
+  s['incl'] = isnum(g) and g > -GRADE_DECL
+
+
+def soft_stop(np, W, s):
+  """The stopping state's request from pid -> stopping to the first stop and the wheels at it (E in the header)."""
+  s.update(SS_KEYS)
+  G = W.G
+  kf = W.k(s['t'])
+  n3, n_rate = int(round(AT_STOP_S / DT)), int(round(SNAP_RATE_S / DT))
+  s['ss_whl_at'] = nmean(W.whl[max(kf - n3, 0):kf + 1])
+  lc = W.lcs
+  with np.errstate(invalid='ignore'):
+    tr = np.flatnonzero((lc[1:] == 2) & (lc[:-1] == 1)) + 1
+  tr = tr[tr <= kf]
+  if not len(tr):
+    return
+  kst = int(tr[-1])
+  seg = W.out[kst:kf + 1]
+  frm = W.out[kst - 1] if W.out[kst - 1] == W.out[kst - 1] else W.out[kst]
+  s['ss_t'], s['ss_from'], s['ss_min'] = float(G[kst] - G[kf]), float(frm), nmin(seg)
+  s['ss_at'] = float(W.out[kf]) if W.out[kf] == W.out[kf] else nmean(W.out[max(kf - 2, 0):kf + 1])
+  ok = np.isfinite(seg)
+  if ok.any():
+    runmin = np.minimum.accumulate(np.where(ok, seg, np.inf))
+    s['ss_ease'] = nmax(np.where(ok, seg - runmin, NAN))
+  if kf + 1 - n_rate > kst - 1:
+    s['ss_rate'] = nmin((W.out[kst - 1 + n_rate:kf + 1] - W.out[kst - 1:kf + 1 - n_rate]) / SNAP_RATE_S)
+  s['ss_dur'] = (kf - kst) * DT
+  s['ss_whl'] = nmin(W.whl[kst:kf + 1])
+  if isnum(frm) and frm <= STOP_ACCEL + 0.01:
+    s['ss_kind'] = 'kept'        # handed over at -1.2 or stronger: the stopping state keeps it (no ramp)
+  elif not s['ss_dur'] >= 0.2 or not isnum(s['ss_rate']):
+    s['ss_kind'] = 'short'
+  else:
+    s['ss_kind'] = 'soft' if s['ss_rate'] > SOFT_RATE else 'stock'
+
+
 def find_stops(D):
   out = []
   runs = still_runs(D)
   np = D.np
   prev_end = D.cs_t[0] - 1.0
-  for a, b in runs:
+  skip_to = -math.inf
+  for i, (a, b) in enumerate(runs):
+    if a <= skip_to + 1e-6:    # v1.3: the re-stop after a roll belongs to the stop before it
+      prev_end = b
+      continue
+    nxt = runs[i + 1:]
+    ft = first_touch(D, a, prev_end)      # v1.3: the car stood shorter than 0.5 s first, then rolled into this stop
+    if ft is not None:
+      nxt = [(a, b)] + nxt
+      a, b = ft
     i0, i1 = np.searchsorted(D.cc_t, a - LONG_BEFORE_S), np.searchsorted(D.cc_t, a, side='right')
     if i1 > i0 and D.long[i0:i1].any():
       # long control must also have been on the last time the car was at 5 mph or faster: a stop the driver
       # took over above 5 mph (and finished within 3 s) is a brake press, not an openpilot stop
       fast = np.flatnonzero((D.cs_t > prev_end) & (D.cs_t < a) & (D.v >= CREEP_TOP))
       if not len(fast) or hold(np, D.cc_t, D.long.astype(float), [D.cs_t[fast[-1]]], stale=0.3)[0] > 0.5:
-        out.append(analyse_stop(D, a, b, prev_end))
-    prev_end = b
+        s = analyse_stop(D, a, b, prev_end, nxt)
+        out.append(s)
+        if s['ra_consumed'] is not None:
+          skip_to = s['ra_consumed']
+    prev_end = runs[i][1]
   return out
 
 
@@ -1678,6 +2050,63 @@ def print_stop_end(stops):
     say(f"  {s['n']:2d}  {lat:<22} {win:<38} {rel:<16} {tail:<29} {snap}" + ('  (creep)' if s['creep'] else ''))
 
 
+def g_txt(s):
+  """grade 3 s median / at the first stop, %."""
+  if not s['has_grade']:
+    return '-'
+  return f"{fmt(s['grade3'], 1, 5, plus=True)}/{fmt(s['grade'], 1, 5, plus=True)}" + ('?' if s['grade_bad'] else '')
+
+
+def roll_cells(s, p):
+  """One roll in the hills table: p = 'rs' (slow, before the stop) or 'ra' (after the stop / held)."""
+  pc = (lambda x: f"{x * 100:3.0f}%" if isnum(x) else '   -')
+  if p == 'rs':
+    head = (f"slow  {'-':>4} {s['rs_t']:+5.1f}@{fmt(mph(s['rs_vmin']), 1, 3)} {s['rs_dist']:4.2f} {fmt(mph(s['rs_vmax']), 1, 3)}"
+            f" {fmt(s['rs_dur'], 1, 4)} 1 stop")
+  else:
+    head = (f"{s['ra_kind']:<5} {fmt(s['ra_first_dur'], 2, 4)} {s['ra_t']:+5.1f}     {s['ra_dist']:4.2f} {fmt(mph(s['ra_vmax']), 1, 3)}"
+            f" {fmt(s['ra_t2'], 1, 4)} {s['ra_n']} {s['ra_end']:<4}")
+  g = (lambda k: s[p + '_' + k])
+  lcs = g('lcs') if len(g('lcs')) <= 9 else g('lcs')[:7] + '..'
+  op = f"{fmt(g('op_min'), 2, 5)}..{fmt(g('op_max'), 2, 5)} {lcs:<9}"
+  esp = (f"{fmt(g('tsk'), 1, 4, plus=True)} {pc(g('verz'))}({f1(g('verz0'), 0)}) {fmt(g('bar0'), 0, 3)}>{fmt(g('bar'), 0, 3)}"
+         f" {'-' if not isnum(g('h53')) else int(g('h53'))} {g('hms') or '-':<7} {pc(g('anh'))} {pc(g('go'))} {g('blip'):2d}")
+  drv = f"{g('drv'):+.1f}" if isnum(g('drv')) else '-'
+  return f"{head}  {op} {esp} {drv:>5}"
+
+
+def ss_cells(s):
+  if not s['ss_kind']:
+    return f"{'-':<38} whl {fmt(s['ss_whl_at'], 2, 5)}"
+  return (f"{fmt(s['ss_from'], 2, 5)}>{fmt(s['ss_min'], 2, 5)}>{fmt(s['ss_at'], 2, 5)} {fmt(s['ss_ease'], 2, 4)}"
+          f" {fmt(s['ss_rate'], 1, 5)} {fmt(s['ss_dur'], 1, 3)} {s['ss_kind']:<5}  whl {fmt(s['ss_whl_at'], 2, 5)}/"
+          f"{fmt(s['ss_whl'], 2, 5)}")
+
+
+def print_hills(stops):
+  say('HILLS, THE ROLL AFTER THE STOP AND THE SOFT STOP (v1.3; grade = Motor_16 TSK_Steigung %, minus = downhill: median of')
+  say('  the 3 s before the stop / at it (? = not valid there), decl = under -3 %; stood = how long the car stood at the first')
+  say('  stop before it rolled (under 0.5 s = a brief stop); roll: slow = slowed to (mph, s before the stop) and sped up')
+  say('  again with openpilot asking to brake, m from there to the stop; stop = the wheels moved again within 5 s of the stop,')
+  say('  held = later while openpilot still held the car (openpilot on, no gas, not asking to go for 0.2 s): from = s after')
+  say('  the stop, m (wheel speeds), peak mph, s to the next stop, rolls, what ended it (stop / gas / op = openpilot started /')
+  say('  open = no stop in 10 s); go = openpilot go-pulses under 0.2 s (chatter); during it: OP = what')
+  say('  openpilot asked min..max and its states, TSK = Motor_20 target max, b27 = ESP_05 TSK braking bit on for that share')
+  say('  of the roll (its value just before), bar = brake pressure before > lowest in the roll, h53 = ESP hold (bit 53) seen,')
+  say('  HMS = ACC_07 HMS values, Anh / Anf = ACC_06 Anhalten / ACC_07 Anfahren on (share), drv = the driver braked (s after')
+  say('  the first stop); soft stop = the stopping state\'s request at pid -> stopping > strongest > at the moment of stopping,')
+  say('  how much it eased back, steepest change m/s3 (stock snap about -6), s in the stopping state, kind (soft / stock /')
+  say('  kept = handed over at -1.2 or stronger / short), wheels at the stop (last 0.3 s) / strongest in the stopping state)')
+  say('   #  grade 3s/at  decl  roll: kind stood from@mph   m  mph stop n end    OP            states    TSK  b27       bar'
+      '    h53 HMS     Anh  Anf  go   drv   soft stop: from>min>at  eased m/s3  s  kind')
+  for s in stops:
+    rows = [roll_cells(s, p) for p in ('rs', 'ra') if s[p]] or ['-']
+    say(f"  {s['n']:2d}  {g_txt(s):<12} {'decl' if s['decl'] else ('up' if s['incl'] else '-'):<4}  {rows[0]:<122}"
+        f"  {ss_cells(s)}" + ('  (creep)' if s['creep'] else ''))
+    for r in rows[1:]:
+      say(f"  {'':2}  {'':<12} {'':<4}  {r}")
+
+
 def print_presses(presses, n_stand):
   say('DRIVER BRAKE PRESSES WHILE OPENPILOT DROVE (brakePressed going on with long control on at that moment or 0.2 s')
   say('  before; set = set speed mph + how it was set (as above); OP now = openpilot\'s accel just before the press,')
@@ -1747,7 +2176,78 @@ def group_stats(name, R, stops, presses, blk_rest, blk_after):
   opt = sum(r['stats']['op'] for r in rs)
   g['above'] = {m: (sum(r['stats'][f'op{m}'] for r in rs) / opt if opt > 1 else NAN) for m in (25, 30, 35)}
   g['end'] = end_stats(shp, S)
+  g['hill'] = hill_stats(S, shp)
   return g
+
+
+def most(vals):
+  """The most common value (ties: the first seen), '' for none."""
+  return max(vals, key=lambda x: (vals.count(x), -vals.index(x))) if vals else ''
+
+
+def rolled(s):
+  return s['ra'] or s['rs']
+
+
+def rk(s, key):
+  """A 'during the roll' value: of the slow roll before the stop if there was one, else of the roll after it."""
+  return s['rs_' + key] if s['rs'] else s['ra_' + key]
+
+
+def r_dist(s):
+  return (s['rs_dist'] if s['rs'] else 0.0) + (s['ra_dist'] if s['ra'] else 0.0)
+
+
+def r_vmax(s):
+  return nmax([s['rs_vmax'] if s['rs'] else NAN, s['ra_vmax'] if s['ra'] else NAN])
+
+
+def hill_stats(S, shp):
+  """v1.3: grades, rolls (slow before the stop, after it, held later; all stops that are not creep stops: the driver
+  stopping a roll is the point) and the soft stop (the stops in the numbers)."""
+  def mw(vals, worst):
+    vals = [v for v in vals if isnum(v)]
+    return (med(vals), worst(vals) if vals else NAN)
+  nc = [s for s in S if not s['creep']]
+  decl = [s for s in nc if s['decl']]
+  ra = [s for s in nc if rolled(s)]
+  dra = [s for s in decl if rolled(s)]
+  ss = [s for s in shp if s['ss_kind'] in ('soft', 'stock')]
+  hms = [rk(s, 'hms') for s in dra if rk(s, 'hms')]
+  h = {'n': len(nc), 'has_grade': any(s['has_grade'] for s in nc),
+       'graded': sum(1 for s in nc if isnum(s['grade']) or isnum(s['grade3'])),
+       'decl': len(decl), 'incl': sum(1 for s in nc if s['incl']),
+       'decl_g': mw([s['grade'] if isnum(s['grade']) else s['grade3'] for s in decl], min),
+       'ra': len(ra), 'dra': len(dra), 'ira': sum(1 for s in ra if s['incl']),
+       'fra': sum(1 for s in ra if not s['decl'] and not s['incl']),
+       'dra_slow': sum(1 for s in dra if s['rs']), 'dra_stop': sum(1 for s in dra if s['ra_kind'] == 'stop'),
+       'dra_held': sum(1 for s in dra if s['ra_kind'] == 'held'),
+       'dra_rl': sum(1 for s in dra if s['ra_kind'] == 'go'),
+       'dra_m': mw([r_dist(s) for s in dra], max), 'dra_sum': sum(r_dist(s) for s in dra),
+       'ra_sum': sum(r_dist(s) for s in ra), 'oth_sum': sum(r_dist(s) for s in ra if not s['decl']),
+       'dra_v': mw([mph(r_vmax(s)) for s in dra], max),
+       'dra_vmin': mw([mph(s['rs_vmin']) for s in dra if s['rs']], min),
+       'dra_rise': mw([mph(s['rs_rise']) for s in dra if s['rs']], max),
+       'dra_t2': mw([s['rs_dur'] if s['rs'] else s['ra_t2'] for s in dra], max),
+       'dra_t': mw([s['ra_t'] for s in dra if s['ra']], min), 'dra_drv': sum(1 for s in dra if isnum(rk(s, 'drv'))),
+       'dra_first': sum(1 for s in dra if s['ra'] and s['ra_first_dur'] < STILL_S),
+       'dra_op': mw([rk(s, 'op_min') for s in dra], max), 'dra_opx': mw([rk(s, 'op_max') for s in dra], max),
+       'dra_lcs': most([rk(s, 'lcs') for s in dra]),
+       'dra_tsk': mw([rk(s, 'tsk') for s in dra], max), 'dra_verz': mw([rk(s, 'verz') for s in dra], min),
+       'dra_verz0': mw([rk(s, 'verz0') for s in dra], min), 'dra_bar0': mw([rk(s, 'bar0') for s in dra], min),
+       'dra_bar': mw([rk(s, 'bar') for s in dra], min),
+       'dra_h53': sum(1 for s in dra if isnum(rk(s, 'h53')) and rk(s, 'h53') > 0.5),
+       'dra_h53_known': sum(1 for s in dra if isnum(rk(s, 'h53'))),
+       'dra_hms': most(hms), 'dra_anh': mw([rk(s, 'anh') for s in dra], min),
+       'dra_go': mw([rk(s, 'go') for s in dra], max), 'dra_gap': mw([s['ra_gap'] if s['ra'] else s['gap'] for s in dra], min),
+       'dra_blip': sum(rk(s, 'blip') for s in dra), 'ra_blip': sum(rk(s, 'blip') for s in ra),
+       'hb_n': sum(1 for s in nc if s['hold_blip']), 'hb': sum(s['hold_blip'] for s in nc),
+       'ss_of': sum(1 for s in shp if s['ss_kind']), 'ss_soft': sum(1 for s in shp if s['ss_kind'] == 'soft'),
+       'ss_stock': sum(1 for s in shp if s['ss_kind'] == 'stock'), 'ss_kept': sum(1 for s in shp if s['ss_kind'] == 'kept'),
+       'ss_at': mw([s['ss_at'] for s in ss], min), 'ss_rate': mw([s['ss_rate'] for s in ss], min),
+       'ss_ease': mw([s['ss_ease'] for s in ss], max), 'ss_min': mw([s['ss_min'] for s in ss], min),
+       'ss_whl_at': mw([s['ss_whl_at'] for s in shp], min), 'ss_whl': mw([s['ss_whl'] for s in shp], min)}
+  return h
 
 
 def end_stats(shp, S):
@@ -1829,6 +2329,108 @@ def print_groups(groups):
           f" stopping snap on {e['snap']} of {e['snap_of']}: {f1(e['snap_from'][0], 2)} > {f1(e['snap_to'][0], 2)} in"
           f" {f1(e['snap_t'][0], 2)} s ({f1(e['snap_rate'][0], 1)} m/s3), wheels after it {f1(e['snap_wj'][0], 1)} m/s3"
           f" (steepest {f1(e['snap_wj'][1], 1)}) to {f1(e['snap_wmin'][0], 2)} ({f1(e['snap_wmin'][1], 2)})")
+    h = g['hill']
+    if h['n']:
+      say(f"    hills (v1.3): {hill_words(h)}")
+      say(f"      soft stop: {soft_words(h)}")
+
+
+def pct(x):
+  return f1(x * 100, 0) + '%' if isnum(x) else '-'
+
+
+def hill_words(h):
+  """One branch's hills and rolls after the stop in words."""
+  if not h['has_grade']:
+    g = 'no grade on the bus (Motor_16): declines cannot be told'
+  else:
+    g = (f"{h['decl']} of {h['n']} stops on a decline under -3 %"
+         + (f" (grade {f1(h['decl_g'][0], 1)} % median, steepest {f1(h['decl_g'][1], 1)})" if h['decl'] else '')
+         + f", {h['incl']} uphill" + (f", {h['n'] - h['graded']} without a valid grade" if h['n'] > h['graded'] else ''))
+  if h['dra']:
+    kinds = []
+    if h['dra_slow']:
+      kinds.append(f"{h['dra_slow']} sped up again just before stopping (slowed to {f1(h['dra_vmin'][0], 1)} mph, then up by"
+                   f" {f1(h['dra_rise'][0], 1)} mph, most {f1(h['dra_rise'][1], 1)})")
+    if h['dra_stop']:
+      kinds.append(f"{h['dra_stop']} rolled again after standing ({h['dra_first']} of them after a brief stop under 0.5 s;"
+                   f" from {f1(h['dra_t'][0], 1)} s after it)")
+    if h['dra_held']:
+      kinds.append(f"{h['dra_held']} rolled later while openpilot still held the car")
+    r = (f"ROLLED on {h['dra']} of the {h['decl']} on declines: " + ', '.join(kinds) + f"; {f1(h['dra_m'][0], 2)} m median"
+         f" (most {f1(h['dra_m'][1], 2)}, {f1(h['dra_sum'], 1)} m in all), peak {f1(h['dra_v'][0], 1)} mph (most"
+         f" {f1(h['dra_v'][1], 1)}), stopped {f1(h['dra_t2'][0], 1)} s later; the driver braked during {h['dra_drv']}"
+         + (f"; openpilot chatter (asking to go for under 0.2 s) {h['dra_blip']} time(s)" if h['dra_blip'] else ''))
+  elif h['decl']:
+    r = f"no roll on the {h['decl']} on declines"
+  else:
+    r = 'no stop on a decline'
+  o = (f"; rolls elsewhere: {h['ira']} uphill, {h['fra']} flat / unknown ({f1(h['oth_sum'], 2)} m)" if h['ra'] > h['dra'] else '')
+  c = (f"; openpilot asked to go for under 0.2 s while standing on {h['hb_n']} stops ({h['hb']} pulses: each can drop the TSK's"
+       " brake torque)" if h['hb'] else '')
+  return f"{g}; {r}{o}{c}"
+
+
+def soft_words(h):
+  if not h['ss_of']:
+    return 'no stopping state before a stop in the numbers'
+  return (f"{h['ss_soft']} soft / {h['ss_stock']} stock / {h['ss_kept']} kept of {h['ss_of']} (stopping state before the stop);"
+          f" request at the moment of stopping {f1(h['ss_at'][0], 2)} median (strongest {f1(h['ss_at'][1], 2)}; stock -1.2),"
+          f" strongest in it {f1(h['ss_min'][0], 2)}, eased back {f1(h['ss_ease'][0], 2)} (most {f1(h['ss_ease'][1], 2)}), steepest"
+          f" change {f1(h['ss_rate'][0], 1)} m/s3 (stock about -6); wheels at the stop {f1(h['ss_whl_at'][0], 2)} (strongest"
+          f" {f1(h['ss_whl_at'][1], 2)}), strongest in the stopping state {f1(h['ss_whl'][0], 2)} ({f1(h['ss_whl'][1], 2)})"
+          + ("; (on soft stops the 'stopping snap' above is the stock ramp to -1.2 after the wheels stopped: nothing to feel)"
+             if h['ss_soft'] else ''))
+
+
+def hill_story(groups, stops):
+  """([bottom-line lines], paste line): hills, the rolls and the soft stop (v1.3)."""
+  lines = []
+  for g in groups:
+    h = g['hill']
+    if not h['n']:
+      continue
+    lines.append(f"  Hills on {g['name']}: {hill_words(h)}.")
+    lines.append(f"  Soft stop on {g['name']}: {soft_words(h)}.")
+  nc = [s for s in stops if not s['creep']]
+  h = hill_stats(stops, [s for s in stops if in_numbers(s)])
+  if not nc:
+    return lines, 'BL hill: no stop'
+  if h['dra']:
+    mech = (f"during those rolls openpilot asked {f1(h['dra_op'][0], 2)}..{f1(h['dra_opx'][0], 2)} (state {h['dra_lcs'] or '-'}),"
+            f" the TSK target went up to {f1p(h['dra_tsk'][0], 1)} (highest {f1p(h['dra_tsk'][1], 1)}), the TSK braking bit (ESP_05"
+            f" bit 27) was on for {pct(h['dra_verz'][0])} of the roll (just before it: {f1(h['dra_verz0'][0], 0)}), the brake pressure"
+            f" went {f1(h['dra_bar0'][0], 0)} > {f1(h['dra_bar'][0], 0)} bar, the ESP hold (bit 53) was there on {h['dra_h53']} of"
+            f" {h['dra_h53_known']}, HMS {h['dra_hms'] or '-'}, ACC_06 Anhalten {pct(h['dra_anh'][0])} / ACC_07 Anfahren"
+            f" {pct(h['dra_go'][0])} of it" + (f", {h['dra_blip']} openpilot go-pulse(s) under 0.2 s" if h['dra_blip'] else ''))
+    if isnum(h['dra_bar'][0]) and isnum(h['dra_bar0'][0]) and h['dra_bar'][0] < 0.5 * h['dra_bar0'][0]:
+      why = 'the brakes let go (the pressure fell) while openpilot still asked to brake'
+    elif isnum(h['dra_bar'][0]):
+      why = 'the brake pressure stayed up: the car slid against the brakes or the pressure was too low for the slope'
+    else:
+      why = 'ESP_05 is not on the bus: whether the brakes let go cannot be told'
+    so = (f"  So (hills): the 'slow down, stop, roll, stop' is in the logs on {h['dra']} of {h['decl']} stops on declines"
+          f" (slow {h['dra_slow']}, after standing {h['dra_stop']}, held {h['dra_held']}, openpilot moving off again {h['dra_rl']}; {f1(h['dra_m'][0], 2)} m median, most"
+          f" {f1(h['dra_m'][1], 2)}); {mech}: {why}.")
+  elif h['decl']:
+    so = f"  So (hills): no roll on the {h['decl']} stops on declines in these drives."
+  elif not h['has_grade']:
+    so = (f"  So (hills): Motor_16 (grade) is not on the bus; rolls: {h['ra']} of {h['n']}"
+          + (f" ({f1(h['ra_sum'], 2)} m in all)" if h['ra'] else '') + '.')
+  else:
+    so = f"  So (hills): no stop on a decline in these drives; rolls: {h['ra']} of {h['n']}."
+  lines.append(so)
+  short = (f"BL hill n={h['n']} gr={h['graded']} decl={h['decl']} ra={h['dra']}/{h['decl']}"
+           f"(slow{h['dra_slow']},stop{h['dra_stop']},held{h['dra_held']},go{h['dra_rl']})"
+           + (f" {f1(h['dra_m'][0], 2)}/{f1(h['dra_m'][1], 2)}/{f1(h['dra_sum'], 1)}m v{f1(h['dra_v'][0], 1)}mph"
+              f" vmin{f1(h['dra_vmin'][0], 1)}+{f1(h['dra_rise'][0], 1)} t{f1(h['dra_t'][0], 1)} t2{f1(h['dra_t2'][0], 1)}"
+              f" brief{h['dra_first']} drv{h['dra_drv']} op{f1(h['dra_op'][0], 2)}..{f1(h['dra_opx'][0], 2)}"
+              f"({h['dra_lcs'] or '-'}) tsk{f1p(h['dra_tsk'][1], 1)} b27{pct(h['dra_verz'][0])}(pre{f1(h['dra_verz0'][0], 0)})"
+              f" bar{f1(h['dra_bar0'][0], 0)}>{f1(h['dra_bar'][0], 0)} h53 {h['dra_h53']}/{h['dra_h53_known']} hms{h['dra_hms'] or '-'}"
+              f" anh{pct(h['dra_anh'][0])} anf{pct(h['dra_go'][0])} blip{h['dra_blip']} gap{f1(h['dra_gap'][0], 1)}" if h['dra'] else '')
+           + f"; other ra=up{h['ira']}/flat{h['fra']} {f1(h['oth_sum'], 2)}m blip{h['ra_blip'] - h['dra_blip']} hb{h['hb_n']}/{h['hb']}"
+           + f"; soft={h['ss_soft']}/{h['ss_of']} at{f1(h['ss_at'][0], 2)} rate{f1(h['ss_rate'][0], 1)} whl{f1(h['ss_whl_at'][0], 2)}")
+  return lines, short
 
 
 def pick_compare(groups):
@@ -1916,6 +2518,7 @@ def bottom_line(groups, stops):
   if so:
     out.append('  So: ' + '; '.join(so) + '.')
   out += end_story(end_stats([s for s in stops if in_numbers(s)], stops))[0]
+  out += hill_story(groups, stops)[0]
   return out
 
 
@@ -2026,6 +2629,50 @@ def end_detail(s):
                                        f"none (handed over at {s['snap_from']:.2f}, kept)")
                + f"; the wheels then built up at {f1(s['snap_wj'], 1)} m/s3 to {f1(s['snap_wmin'], 2)}"
                f" {f1(s['snap_wmin_t'], 2)} s after it")
+  out += hill_detail(s)
+  return out
+
+
+def hill_detail(s):
+  """v1.3 detail lines: grade, the roll after the stop, the soft stop."""
+  out = []
+  if s['has_grade']:
+    out.append(f"  grade {f1p(s['grade3'], 1)} % (median of the 3 s before the first stop), {f1p(s['grade'], 1)} % at it"
+               + (' (not valid there)' if s['grade_bad'] else '') + (': a DECLINE' if s['decl'] else (': uphill' if s['incl'] else '')))
+  else:
+    out.append('  grade: Motor_16 not on the bus')
+  def dur_txt(p):
+    g = (lambda k: s[p + '_' + k])
+    return (f"    during it: openpilot asked {f1(g('op_min'), 2)}..{f1(g('op_max'), 2)} ({g('lcs') or '-'}), TSK target"
+            f" {f1p(g('tsk0'), 1)} before > up to {f1p(g('tsk'), 1)}, TSK braking bit (ESP_05 bit 27) {f1(g('verz0'), 0)}"
+            f" before, on for {pct(g('verz'))} of it, brake pressure {f1(g('bar0'), 0)} > {f1(g('bar'), 0)} bar, ESP hold"
+            f" (bit 53) {f1(g('h53'), 0)}, HMS {g('hms') or '-'}, ACC_06 Anhalten {pct(g('anh'))}, ACC_07 Anfahren {pct(g('go'))}"
+            + (f", openpilot asked to go for under 0.2 s {g('blip')} time(s) (chatter)" if g('blip') else '') + '; '
+            + (f"the DRIVER braked {g('drv'):.1f} s after it began at {f1(mph(g('drv_v')), 1)} mph" if isnum(g('drv'))
+               else 'the driver did not brake'))
+  if s['rs']:
+    out.append(f"  SLOW ROLL BEFORE THE STOP: {-s['rs_t']:.1f} s before the stop the car had slowed to {f1(mph(s['rs_vmin']), 1)} mph,"
+               f" then sped up again to {f1(mph(s['rs_vmax']), 1)} mph (+{f1(mph(s['rs_rise']), 1)} mph, wheels up to"
+               f" {f1p(s['rs_amax'], 2)} m/s2) with openpilot asking to brake; {s['rs_dist']:.2f} m from there to the stop")
+    out.append(dur_txt('rs'))
+  if s['ra']:
+    first = f"the car stood {s['ra_first_dur']:.2f} s" + (' (a brief stop, under 0.5 s)' if s['ra_first_dur'] < STILL_S else '')
+    out.append(f"  ROLL AFTER THE STOP ({'while openpilot still held it, ' if s['ra_kind'] == 'held' else ''}"
+               f"{'openpilot moved off again toward a car ahead that had not moved, ' if s['ra_kind'] == 'go' else ''}{first}): it rolled"
+               f" from {s['ra_t']:.2f} s after the stop: {s['ra_dist']:.2f} m"
+               + (f" in {s['ra_n']} rolls (first {s['ra_d1']:.2f} m)" if s['ra_n'] > 1 else '')
+               + f", up to {f1(mph(s['ra_vmax']), 1)} mph ({f1p(s['ra_amax'], 2)} m/s2 at the wheels), "
+               + {'stop': f"stopped again {s['ra_t2']:.2f} s after the stop",
+                  'gas': 'until the driver pressed the gas', 'op': 'until openpilot started',
+                  'open': 'no second stop within 10 s'}.get(s['ra_end'], '?')
+               + (f", the car ahead {f1(s['ra_gap'], 1)} m away then" if isnum(s['ra_gap']) else ''))
+    out.append(dur_txt('ra'))
+  if s['ss_kind']:
+    out.append(f"  soft stop ({s['ss_kind']}): pid -> stopping {-s['ss_t']:.2f} s before the first stop at {f1(s['ss_from'], 2)}, strongest"
+               f" {f1(s['ss_min'], 2)}, {f1(s['ss_at'], 2)} at the moment of stopping (eased back {f1(s['ss_ease'], 2)}), steepest"
+               f" change {f1(s['ss_rate'], 1)} m/s3; wheels {f1(s['ss_whl_at'], 2)} at the stop, strongest {f1(s['ss_whl'], 2)}")
+  else:
+    out.append(f"  no stopping state before the first stop; wheels {f1(s['ss_whl_at'], 2)} at the stop")
   return out
 
 
@@ -2064,8 +2711,9 @@ def print_detail(e):
     for ln in end_detail(s):
       say(ln)
     t_ref = s['t']
-    a, b = max(W.G[0], t_ref - SHAPE_S), t_ref + 2.0
-    fine = (t_ref - 4.0, t_ref + 2.0)
+    t_end = t_ref + s['ra_tend'] if s['ra'] else t_ref
+    a, b = max(W.G[0], t_ref - SHAPE_S), min(max(t_ref + 2.0, t_end + 1.0), W.G[-1])
+    fine = (t_ref - 4.0, b)
   else:
     p = e
     ld = p['lead']
@@ -2083,7 +2731,7 @@ def print_detail(e):
     t_ref = p['t']
     a, b = t_ref - 3.0, min(t_ref + (p['stop_in'] + 2.0 if p['stop_in'] == p['stop_in'] else 6.0), W.G[-1])
     fine = (t_ref - 1.0, t_ref + 3.0)
-  say('      t   mph  set  lead   vL   plan     OP   sent   TSK  wheels  aEgo  state  ss Anh HMS hold 63  brk gas lng blk')
+  say('      t   mph  set  lead   vL   plan     OP   sent   TSK  wheels  aEgo  state  ss Anh HMS hold 63  brk gas lng blk  b27  bar')
   t = a
   while t <= b + 1e-9:
     k = W.k(t)
@@ -2095,14 +2743,24 @@ def print_detail(e):
         f" {fmt(W.aT[k], 2, 6)} {fmt(W.out[k], 2, 6)} {fmt(W.sent[k], 2, 6)} {fmt(W.tsk[k], 1, 5)} {fmt(W.whl[k], 2, 7)}"
         f" {fmt(W.aego[k], 2, 5)}  {LCS_SHORT.get(int(lc), '?') if lc == lc else '-':>5}  {bits[0]:>2} {bits[1]:>3}"
         f" {bits[2]:>3} {bits[3]:>4} {bits[4]:>2}  {'B' if W.brk[k] else '.':>3} {'G' if W.gas[k] else '.':>3}"
-        f" {'on' if W.long[k] else '.':>3} {int(W.blk[max(k - 2, 0):k + 3].sum()) or '.':>3}")
+        f" {'on' if W.long[k] else '.':>3} {int(W.blk[max(k - 2, 0):k + 3].sum()) or '.':>3}"
+        f"  {'.' if W.verz[k] != W.verz[k] else int(W.verz[k]):>3} {fmt(W.bar[k], 0, 4)}")
     t += 0.1 if fine[0] - 1e-9 <= t < fine[1] - 1e-9 else 0.25
   say('  (t = s from the ' + ('stop' if e['kind'] == 'stop' else 'press') + '; plan = aTarget, OP = carControl accel, sent ='
       ' ACC_06, TSK = Motor_20, state = longControlState, ss = shouldStop, Anh = ACC_06 Anhalten, HMS = ACC_07 HMS,'
-      ' hold = ESP_21 bit 53, 63 = bit 63, B = brake, G = gas, lng = long control on, blk = blocked ACC_06 frames)')
+      ' hold = ESP_21 bit 53, 63 = bit 63, B = brake, G = gas, lng = long control on, blk = blocked ACC_06 frames, b27 ='
+      ' ESP_05 TSK braking bit, bar = brake pressure)')
 
 
 # ============================================================================================ paste
+def roll_paste(s, p):
+  g = (lambda k: s[p + '_' + k])
+  return (f" op={f1(g('op_min'), 2)}..{f1(g('op_max'), 2)}{g('lcs')} tsk={f1p(g('tsk0'), 1)}>{f1p(g('tsk'), 1)}"
+          f" b27={f1(g('verz0'), 0)}/{pct(g('verz'))} bar={f1(g('bar0'), 0)}>{f1(g('bar'), 0)} h53={f1(g('h53'), 0)}"
+          f" hms={g('hms') or '-'} anh={pct(g('anh'))} anf={pct(g('go'))}" + (f" go{g('blip')}" if g('blip') else '')
+          + (f" drv={f1(g('drv'), 1)}@{f1(mph(g('drv_v')), 1)}" if isnum(g('drv')) else ''))
+
+
 def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
   say()
   say('===== PASTE THIS TO CLAUDE (start) =====')
@@ -2112,8 +2770,9 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
            " labels sm=smooth lh=late-hard rg=hard-release-grab is=hard-into-stopping he=hard-eased cr=creep;"
            " classes tl=lead-too-little lt=lead-late/tight nl=no-lead acc=OP-accel es=end-of-stop(<5mph) cr=creep ot=other;"
            " +R=tsk-release; h4=HMS4 latch src@t/vs-ss/vs-stp win=HMS4-window t/s/tsk/whl/+mph/m/end tail=s@mph>mph/m/ask"
-           " snap=from>to/s/m/s3 wj=whl-jerk/min; m/s2, mph, s"
-           " from the stop/press"]
+           " snap=from>to/s/m/s3 wj=whl-jerk/min; v1.3: g=grade%3s/at(D=decline) RS=slow-roll t@vmin>vmax/m-to-stop"
+           " RA=kind/stood>roll-t/m/mph/2nd-stop/n/end op tsk b27=pre/share bar=pre>min h53 hms anh anf go=chatter drv gap2; ss=stopping from>min>at/eased/m/s3/kind ws=whl-at/min;"
+           " hb=go-pulses<0.2s while standing; H=hills ra=rolls/decl-stops hb=stops/pulses; m/s2, mph, s from the stop/press"]
   shown_r = R if len(R) <= 6 else R[:3] + R[-2:]
   for r in shown_r:
     lines.append(f"D {r['rid']} {r['branch']}@{r['commit']} segs={r['segs']}/{r['nseg']}" + (f" q={r['q_segs']}" if r['q_segs'] else '')
@@ -2150,8 +2809,20 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
                    f" snap={e['snap']}/{e['snap_of']}:{f1(e['snap_from'][0], 2)}>{f1(e['snap_to'][0], 2)}/{f1(e['snap_t'][0], 2)}s"
                    f"/{f1(e['snap_rate'][0], 1)} wj={f1(e['snap_wj'][0], 1)}/{f1(e['snap_wj'][1], 1)}"
                    f" wmin={f1(e['snap_wmin'][0], 2)}/{f1(e['snap_wmin'][1], 2)}")
+    h = g['hill']
+    if len(groups) <= 4 and h['n']:
+      lines.append(f"H {g['name']} n={h['n']} gr={h['graded']}" + ('' if h['has_grade'] else '(noMotor_16)')
+                   + f" decl={h['decl']}(g{f1(h['decl_g'][0], 1)}/{f1(h['decl_g'][1], 1)}) up={h['incl']}"
+                   f" ra={h['dra']}/{h['decl']}(slow{h['dra_slow']},stop{h['dra_stop']},held{h['dra_held']},go{h['dra_rl']})"
+                   f" d={f1(h['dra_m'][0], 2)}/{f1(h['dra_m'][1], 2)}/{f1(h['dra_sum'], 1)}m"
+                   f" v={f1(h['dra_v'][0], 1)} t2={f1(h['dra_t2'][0], 1)} drv={h['dra_drv']} oth=up{h['ira']}/flat{h['fra']}"
+                   f" hb={h['hb_n']}/{h['hb']}"
+                   f" ss=soft{h['ss_soft']}/stock{h['ss_stock']}/kept{h['ss_kept']} at={f1(h['ss_at'][0], 2)}/{f1(h['ss_at'][1], 2)}"
+                   f" rate={f1(h['ss_rate'][0], 1)} ease={f1(h['ss_ease'][0], 2)} whl={f1(h['ss_whl_at'][0], 2)}/{f1(h['ss_whl_at'][1], 2)}"
+                   f" wmin={f1(h['ss_whl'][0], 2)}/{f1(h['ss_whl'][1], 2)}")
   if stops:
     lines.append(end_story(end_stats([s for s in stops if in_numbers(s)], stops))[1])
+    lines.append(hill_story(groups, stops)[1])
   xl = []
   for c in blk_rest[:2]:
     xl.append(f"X {c['rid']} {c['clock']} n={','.join(f'{k}:{v}' for k, v in c['n'].items())} acc={f1(min(c['vals']), 2)}"
@@ -2176,7 +2847,8 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
   pr = sorted(presses, key=lambda p: (CLASSES.index(p['cls']) if p['cls'] in CLASSES else 9, p['t']))
   n_p = min(len(pr), max(room * 3 // 5, room - len([s for s in stops if not s['creep']])))
   sel_p = sorted(pr[:n_p], key=lambda p: p['n'])
-  cand = sorted([s for s in stops if not s['creep']], key=lambda s: (-int(s['tsk_rel']), -LABEL_RANK.get(s['label_op'], 0),
+  cand = sorted([s for s in stops if not s['creep']], key=lambda s: (-int(rolled(s) and s['decl']), -int(rolled(s)), -int(s['tsk_rel']),
+                                                                     -LABEL_RANK.get(s['label_op'], 0),
                                                                      -abs(s['fin_whl']) if s['fin_whl'] == s['fin_whl'] else 0))
   sel_s = sorted(cand[:room - len(sel_p)], key=lambda s: s['n'])
   ev = sorted(sel_s + sel_p, key=lambda e: e['n'])
@@ -2208,6 +2880,16 @@ def paste_block(R, stops, presses, groups, notes, missing, blk_rest):
                    + (f" snap={f1(s['snap_from'], 2)}>{f1(s['snap_to'], 2)}/{f1(s['snap_t'], 2)}/{f1(s['snap_rate'], 1)}"
                       if s['snap'] else '')
                    + (f" wj={f1(s['snap_wj'], 1)}/{f1(s['snap_wmin'], 2)}" if isnum(s['snap_wj']) else '')
+                   + (f" g={f1p(s['grade3'], 1)}/{f1p(s['grade'], 1)}{'D' if s['decl'] else ''}" if s['has_grade'] else '')
+                   + (f" hb={s['hold_blip']}" if s['hold_blip'] else '')
+                   + (f" RS={f1(s['rs_t'], 1)}@{f1(mph(s['rs_vmin']), 1)}>{f1(mph(s['rs_vmax']), 1)}/{f1(s['rs_dist'], 2)}m"
+                      + roll_paste(s, 'rs') if s['rs'] else '')
+                   + (f" RA={s['ra_kind']}/{f1(s['ra_first_dur'], 2)}>{f1(s['ra_t'], 2)}/{f1(s['ra_dist'], 2)}m"
+                      f"/{f1(mph(s['ra_vmax']), 1)}/{f1(s['ra_t2'], 1)}s/n{s['ra_n']}/{s['ra_end']}"
+                      + roll_paste(s, 'ra') + f" gap2={f1(s['ra_gap'], 1)}" if s['ra'] else '')
+                   + (f" ss={f1(s['ss_from'], 2)}>{f1(s['ss_min'], 2)}>{f1(s['ss_at'], 2)}/e{f1(s['ss_ease'], 2)}"
+                      f"/{f1(s['ss_rate'], 1)}/{s['ss_kind']}" if s['ss_kind'] else '')
+                   + f" ws={f1(s['ss_whl_at'], 2)}/{f1(s['ss_whl'], 2)}"
                    + (f" [{stop_flags(s)}]" if stop_flags(s) else ''))
     else:
       p = e
@@ -2372,6 +3054,8 @@ def report(ctx):
     print_stop_signals(stops)
     say()
     print_stop_end(stops)
+    say()
+    print_hills(stops)
   else:
     say('No stop by openpilot in these drives.')
   say()
