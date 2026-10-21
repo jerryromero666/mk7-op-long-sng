@@ -421,6 +421,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     action_t =  self.CP.longitudinalActuatorDelay + DT_MDL
     output_a_target_mpc, output_should_stop_mpc = get_accel_from_plan(self.v_desired_trajectory, self.a_desired_trajectory, CONTROL_N_T_IDX,
                                                                         action_t=action_t, vEgoStopping=self.CP.vEgoStopping)
+    # Coast-first approach (long_mpc.py CA_*): the request is not under the accel floor the MPC planned with
+    if self.mpc.ca_floor > ACCEL_MIN:
+      output_a_target_mpc = max(output_a_target_mpc, self.mpc.ca_floor)
     # Launch boost from a dead stop behind a departing lead (launch_boost.py), ACC mode only. It only adds
     # accel, before the accel clip, and while it is on longcontrol leaves stopping. The boosted car runs
     # ahead of the MPC's own state, so the MPC is put on the car's real speed and commanded accel: what

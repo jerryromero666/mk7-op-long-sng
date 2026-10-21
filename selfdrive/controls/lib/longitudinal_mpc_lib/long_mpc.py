@@ -234,6 +234,101 @@ def highway_follow_weight(v_ego, v_full_mph):
   return float(np.interp(v_ego, [v_full - HF_BAND_MPH * CV.MPH_TO_MS, v_full], [0., 1.]))
 
 
+# Coast-first approach: at highway speed, while closing on a slower car with a large reserve, do not ask for more slowing
+# than this car gets by lifting off. On this car (mk7_follow_check F, drive 34f) a request down to about -0.55 m/s2 is met
+# with no brakes (overrun fuel cut / engine drag); under about -0.6 the brakes come on. Today's 45+ mph approaches ask
+# -0.9..-1.2 at ~100 m, mostly because the camera's far-range lead speed is noisy and the compiled approach term
+# (v_ego^2 - v_lead^2) / 5 turns 1 m/s of it into ~12 m of wanted gap. So a FLOOR on the accel the solver may plan
+# (a_min, and the request the planner sends) is raised to minus the larger of the coast decel and CA_NEED_FACTOR x the
+# decel needed to end the approach at the following gap behind the lead at its present speed. Distances and speeds only:
+# the far aLeadK is never used to allow less braking, and the lead speed used is the lower of now and the last second's
+# mean, so an upward jump of a noisy far lead does not open anything. The floor is ON only while all of these hold
+# (on / off thresholds with a dead band in between, where the state is kept):
+#  - RESERVE: this car could still stop CA_RES_D_MIN behind the lead if the lead braked at CA_RES_A_LEAD from its present
+#    speed right now and this car reached CA_RES_A_EGO after an equivalent delay of CA_RES_T s (camera + planner + car,
+#    and the floor's own ramp): on from CA_RES[1] m of reserve, off under CA_RES[0]. A fast approach on much slower
+#    traffic never has it, so it keeps today's earlier, firmer braking.
+#  - speed (on from CA_V_EGO[1], off under CA_V_EGO[0]; under CA_V_MIN the floor is dropped at once), closing (CA_CLOSING),
+#    time to collision (CA_TTC), room beyond the following gap (CA_ROOM), the set speed not under this car's speed, and
+#    in the last CA_BLOCK updates no cut-in (the gap shrank CA_CUTIN_D more than closing explains), no dropout and no
+#    braking lead (aLeadK under CA_LB_A AND its speed fell CA_LB_DV within CA_LB_N updates, CA_LB_CONFIRM updates in a row);
+#    to turn it ON, also: the lead seen for CA_SETTLE updates and its aLeadK not under CA_LB_A (aLeadK alone never turns it
+#    off: on a far camera lead it swings by +-3 m/s2 with the speed noise).
+# No steps: the floor rises (less braking) at most CA_J_UP and falls (more braking) at most CA_J_DOWN per second, starting
+# under the plan already running, so the request never jumps; once the plan no longer touches a falling floor it is
+# removed and the solver is exactly today's. Turned off, the floor is ramped away the same way.
+# Live: /data/coast_approach holds the coast decel in m/s2 (e.g. "0.55"; clamped to CA_A_LIMITS), or "1" (any number
+# from 1 up) = on with CA_ON_DEFAULT. No file, 0, a negative number or junk = off = the behaviour without this feature.
+CA_FILE = '/data/coast_approach'
+CA_ON_DEFAULT = 0.55         # m/s2: the coast decel "1" stands for (the value the sims were run with)
+CA_A_LIMITS = (0.2, 0.6)     # m/s2: coast decel (under about 0.6 this car does not brake)
+CA_NEED_FACTOR = 1.15        # decel allowed = this x the needed decel (when that is above the coast decel)
+CA_T_REACT = 1.0             # s of closing taken off the room before the needed decel is counted
+CA_V_MIN = 40.0 * CV.MPH_TO_MS                          # under this the floor is dropped at once
+CA_V_EGO = (42.0 * CV.MPH_TO_MS, 45.0 * CV.MPH_TO_MS)   # this car's speed: off under .. on from
+CA_CLOSING = (0.3, 1.0)      # m/s closing: off under .. on from
+CA_TTC = (8.0, 10.0)         # s time to collision: off under .. on from
+CA_ROOM = (2.0, 6.0)         # m of room beyond the following gap: off under .. on from
+CA_RES = (0.0, 10.0)         # m of hard-brake reserve: off under .. on from
+CA_RES_A_LEAD = 3.0          # m/s2 the lead is assumed to brake at
+CA_RES_A_EGO = 3.5           # m/s2 this car brakes at after the delay
+CA_RES_T = 1.8               # s equivalent delay
+CA_RES_D_MIN = 3.0           # m left
+CA_LB_A = -1.0               # m/s2 aLeadK under which a lead counts as braking ...
+CA_LB_DV = 3.0               # m/s ... if its speed also fell this much ...
+CA_LB_N = 20                 # ... within this many updates (1 s) ...
+CA_LB_CONFIRM = 3            # ... in this many updates in a row ...
+CA_LB_ROOM_A = 0.0           # ... unless it could brake at this (m/s2) and the reserve would still hold (0 = always)
+CA_SETTLE = 20               # updates a lead must be seen before the floor turns on (at most CA_LB_N)
+CA_CUTIN_D = 8.0             # m the gap may shrink in one update beyond what the closing speed explains
+CA_BLOCK = 20                # updates (1 s) off after a cut-in, a dropout or a braking lead
+CA_J_UP = 0.8                # m/s3: the floor rises (less braking) at most this fast
+CA_J_DOWN = 2.5              # m/s3: and falls (more braking) at most this fast ...
+CA_J_DOWN_FAST = 5.0         # m/s3: ... or this fast once the reserve is gone or the lead cut in / brakes
+CA_RELEASE = 0.3             # m/s2: a falling floor this far under the whole plan is removed
+CA_FILE_PERIOD = 20          # updates between file reads (1 s)
+
+
+def read_coast_approach():
+  try:
+    with open(CA_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return 0.0
+  if len(vals) != 1 or not np.isfinite(vals[0]) or vals[0] <= 0.0:
+    return 0.0
+  if vals[0] >= 1.0:
+    return CA_ON_DEFAULT
+  return float(np.clip(vals[0], *CA_A_LIMITS))
+
+
+def coast_reserve(d_rel, v_lead, v_ego):
+  # m this car would still have behind a lead braking at CA_RES_A_LEAD from now (see CA_* above)
+  v_lead = max(v_lead, 0.0)
+  return d_rel - (CA_RES_D_MIN + CA_RES_T * v_ego + v_ego**2 / (2.0 * CA_RES_A_EGO) - v_lead**2 / (2.0 * CA_RES_A_LEAD))
+
+
+def _band(x, off_on):
+  # 0 under the off threshold, 1 from the on threshold, None in between (keep the state)
+  return 0 if not x >= off_on[0] else (1 if x >= off_on[1] else None)
+
+
+def coast_gate(d_rel, v_lead, v_ego, t_follow, a_coast):
+  # (floor accel, gate) behind one lead from distances and speeds only (see CA_* above); gate 0 off, 1 on, None keep
+  if not (np.isfinite(d_rel) and np.isfinite(v_lead) and np.isfinite(v_ego)):
+    return ACCEL_MIN, 0
+  v_lead = max(v_lead, 0.0)
+  dv = v_ego - v_lead
+  room = d_rel - (CF_SOLVER_STOP_DISTANCE + t_follow * v_lead) - max(dv, 0.0) * CA_T_REACT
+  if dv <= 0.0 or room <= 0.0:
+    return ACCEL_MIN, 0
+  a_allow = min(max(a_coast, CA_NEED_FACTOR * dv**2 / (2.0 * room)), -ACCEL_MIN)
+  bands = (_band(v_ego, CA_V_EGO), _band(dv, CA_CLOSING), _band(d_rel / dv, CA_TTC), _band(room, CA_ROOM),
+           _band(coast_reserve(d_rel, v_lead, v_ego), CA_RES))
+  gate = 0 if 0 in bands else (1 if all(b == 1 for b in bands) else None)
+  return -a_allow, gate
+
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -382,6 +477,14 @@ class LongitudinalMpc:
     self._hf = HF_DEFAULT
     self._hf_cnt = 0
     self._hf_cut = 0.0
+    self._ca = 0.0
+    self._ca_cnt = 0
+    self.ca_floor = ACCEL_MIN   # the planner reads it
+    self._ca_on = False
+    self._ca_block = 0
+    self._ca_vl = [[], []]
+    self._ca_dl = [None, None]
+    self._ca_lb = [0, 0]
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -572,7 +675,14 @@ class LongitudinalMpc:
       self.solver.set(i, "yref", self.yref[i])
     self.solver.set(N, "yref", self.yref[N][:COST_E_DIM])
 
-    self.params[:,0] = ACCEL_MIN
+    # coast-first approach (see CA_* above): a floor on the planned accel while closing with a large reserve
+    if self._ca_cnt % CA_FILE_PERIOD == 0:
+      self._ca = read_coast_approach()
+    self._ca_cnt += 1
+    if self._ca > 0.0 or self.ca_floor > ACCEL_MIN:
+      self._coast_update(radarstate, v_ego, v_cruise, t_follow)
+
+    self.params[:,0] = ACCEL_MIN if self.ca_floor <= ACCEL_MIN else self.ca_floor
     self.params[:,1] = ACCEL_MAX
     self.params[:,2] = np.min(x_obstacles, axis=1)
     self.params[:,3] = np.copy(self.a_prev)
@@ -585,6 +695,70 @@ class LongitudinalMpc:
       self.crash_cnt += 1
     else:
       self.crash_cnt = 0
+
+  def _coast_watch(self, lead, idx, v_ego):
+    # per lead: True when it cut in, dropped out or brakes (confirmed by its speed); keeps the last second of its speed
+    hist = self._ca_vl[idx]
+    if lead is None or not lead.status or not (np.isfinite(lead.dRel) and np.isfinite(lead.vLead)):
+      bad = len(hist) > 0     # a lead that was there and is gone
+      hist.clear()
+      self._ca_dl[idx] = None
+      self._ca_lb[idx] = 0
+      return bad
+    last_d = self._ca_dl[idx]
+    cut_in = last_d is not None and (last_d - max(v_ego - lead.vLead, 0.0) * self.dt - lead.dRel) > CA_CUTIN_D
+    self._ca_dl[idx] = float(lead.dRel)
+    hist.append(float(lead.vLead))
+    if len(hist) > CA_LB_N + 1:
+      hist.pop(0)
+    hard_ok = CA_LB_ROOM_A > 0.0 and (lead.dRel - (CA_RES_D_MIN + CA_RES_T * v_ego + v_ego**2 / (2.0 * CA_RES_A_EGO) -
+                                                   max(lead.vLead, 0.0)**2 / (2.0 * CA_LB_ROOM_A))) >= 0.0
+    if np.isfinite(lead.aLeadK) and lead.aLeadK < CA_LB_A and max(hist) - hist[-1] >= CA_LB_DV and not hard_ok:
+      self._ca_lb[idx] += 1
+    else:
+      self._ca_lb[idx] = 0
+    return bool(cut_in or self._ca_lb[idx] >= CA_LB_CONFIRM or not np.isfinite(lead.aLeadK))
+
+  def _coast_v_lead(self, lead, idx):
+    # the lead speed the floor is worked out from: the lower of now and the last second's mean
+    hist = self._ca_vl[idx]
+    return min(float(lead.vLead), float(np.mean(hist))) if hist else float(lead.vLead)
+
+  def _coast_update(self, radarstate, v_ego, v_cruise, t_follow):
+    lead_one, lead_two = radarstate.leadOne, radarstate.leadTwo
+    bad = self._coast_watch(lead_one, 0, v_ego)
+    bad = self._coast_watch(lead_two, 1, v_ego) or bad
+    self._ca_block = CA_BLOCK if bad else max(self._ca_block - 1, 0)
+    a_fl, gate = ACCEL_MIN, 0
+    urgent = bad or self._ca_block > 0
+    if self._ca > 0.0 and self._ca_block == 0 and lead_one.status and v_cruise >= v_ego - 1.0:
+      a_fl, gate = coast_gate(lead_one.dRel, self._coast_v_lead(lead_one, 0), v_ego, t_follow, self._ca)
+      urgent = coast_reserve(lead_one.dRel, self._coast_v_lead(lead_one, 0), v_ego) < CA_RES[0]
+      if lead_two.status:
+        a_fl2, gate2 = coast_gate(lead_two.dRel, self._coast_v_lead(lead_two, 1), v_ego, t_follow, self._ca)
+        a_fl = min(a_fl, a_fl2)
+        urgent = urgent or coast_reserve(lead_two.dRel, self._coast_v_lead(lead_two, 1), v_ego) < CA_RES[0]
+        gate = 0 if 0 in (gate, gate2) else (1 if gate == gate2 == 1 else None)
+    if gate == 1 and (len(self._ca_vl[0]) <= CA_SETTLE or not lead_one.aLeadK >= CA_LB_A or
+                      (lead_two.status and not lead_two.aLeadK >= CA_LB_A)):
+      gate = None    # a lead seen for less than a second, or one that looks like it brakes, does not turn the floor on
+    if gate is not None:
+      self._ca_on = gate == 1
+    target = a_fl if self._ca_on else ACCEL_MIN
+    if v_ego < CA_V_MIN or not np.isfinite(target):
+      self.ca_floor = ACCEL_MIN    # inert under 40 mph
+      self._ca_on = False
+      return
+    if self.ca_floor <= ACCEL_MIN:
+      if target <= ACCEL_MIN:
+        return
+      # start under the plan already running (and its next second), so the request does not jump up
+      self.ca_floor = max(min(float(np.min(self.a_solution[T_IDXS <= 1.0])), self.x0[2], target), ACCEL_MIN)
+    j_down = CA_J_DOWN_FAST if urgent else CA_J_DOWN
+    step = float(np.clip(target - self.ca_floor, -j_down * self.dt, CA_J_UP * self.dt))
+    self.ca_floor = max(self.ca_floor + step, ACCEL_MIN)
+    if step < 0.0 and self.ca_floor < float(np.min(self.a_solution)) - CA_RELEASE:
+      self.ca_floor = ACCEL_MIN    # the plan no longer touches it: gone, the solver is today's
 
   def run(self):
     for i in range(N+1):
