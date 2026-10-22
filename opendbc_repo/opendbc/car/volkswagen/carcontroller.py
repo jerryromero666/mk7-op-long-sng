@@ -119,6 +119,15 @@ class MQBStandstillManager:
   ANNOUNCE_SPEED = 0.9         # m/s: start the announcement below this while braking (parent latched at 0.6-1.0)
   ANNOUNCE_MIN_SPEED = 0.3     # m/s: never announce slower, so it always ends before the wheels stop
   ANNOUNCE_FRAMES = 20         # 0.4 s at 50 Hz: the window in front of every fault-free hold (332/333)
+  # SET at a stop: openpilot engaged (preEnabled) with the car already stopped and the driver on the brake, so the
+  # rolling announcement above can no longer happen. Without it the ESP grants only a short standstill and gives up
+  # after ~3.5 s (route 355 22:20, +5.6 %: bit 29, TSK 3 -> 6, car rolled 1 m). The same announcement is sent here,
+  # but only while the driver's brake holds the car (HMS 1 drops the TSK brake torque), and only once per stop.
+  # It ends on bit 63 (announced hold, as on a rolling stop), after ANNOUNCE_FRAMES, or when the brake is released;
+  # without bit 63 the stop continues exactly as before.
+  # It starts only on the frame openpilot engages (never after HMS 4 went out: no 4 -> 1 at a standstill), so a brake
+  # press at an engaged stop never starts it.
+  STILL_V = 0.1                # m/s (vEgoStarting): the car counts as stopped below this
   RELEASE_SPEED = 1.5          # m/s: the announced stop ends once driving again; a new slowdown re-announces
   UPHILL_ACCEL_FLOOR = 1.5     # m/s² accel floor on launch from confirmed hold (any grade)
   DECLINE_PUSH = 0.3           # m/s2: a request above this is a launch / push: today's frames (see DECLINE_FILE)
@@ -138,6 +147,8 @@ class MQBStandstillManager:
     self._announce_frames = 0    # HMS=1 frames sent in the early announcement of this stop
     self._announce_seen = False  # ESP bit 63 seen during that announcement
     self._stop_announced = False # this stop's announcement is over (until vEgo > RELEASE_SPEED)
+    self._still_announce = False # the current announcement is the SET-at-a-stop one (see STILL_V)
+    self._prev_hms_active = False
     self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
     self._decl_threshold = DECLINE_DEFAULT
     self._decl_cnt = 0
@@ -215,12 +226,24 @@ class MQBStandstillManager:
       self._announce_frames = 0
       self._announce_seen = False
       self._stop_announced = False
+      self._still_announce = False
       self._announced_hold = False
-    if hms_active and not self._stop_announced and not starting:
-      if self._announce_frames > 0 or (self.ANNOUNCE_MIN_SPEED <= v < self.ANNOUNCE_SPEED and (accel < 0 or stopping)):
+    held = hms_active and v < self.STILL_V and CS.out.brakePressed
+    if held and not self._prev_hms_active and not self._stop_announced:
+      self._still_announce = True       # SET at a stop with the brake held (see STILL_V)
+    self._prev_hms_active = hms_active
+    # while the driver's brake holds the car nothing can drive off, so a 'starting' plan does not skip it (route 355:
+    # after SET at the stop the plan sat in pid under 0.5 m/s, i.e. 'starting', and HMS went straight to 4)
+    if hms_active and not self._stop_announced and (not starting or held):
+      if self._announce_frames > 0 or self._still_announce or \
+         (self.ANNOUNCE_MIN_SPEED <= v < self.ANNOUNCE_SPEED and (accel < 0 or stopping)):
         if self._announce_frames > 0:   # bit 63 counts only as an answer to our HMS 1
           self._announce_seen = self._announce_seen or bool(getattr(CS, 'esp_stopping', False))
-        if self._announce_seen or self._announce_frames >= self.ANNOUNCE_FRAMES or v < self.ANNOUNCE_MIN_SPEED:
+        if self._still_announce:
+          end = v >= self.STILL_V or not CS.out.brakePressed
+        else:
+          end = v < self.ANNOUNCE_MIN_SPEED
+        if self._announce_seen or self._announce_frames >= self.ANNOUNCE_FRAMES or end:
           self._stop_announced = True
           self._announced_hold = self._announce_seen
         else:
