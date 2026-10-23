@@ -43,7 +43,7 @@ if HARDWARE.get_device_type() == 'mici':
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])
 YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
-FIXED_PITCH = 0.0236  # hard-locked pitch for non-standard mount
+FIXED_PITCH = 0.0469  # hard-locked pitch for non-standard mount (re-captured 2026-10-22, mk7_pitch_check: +1.34 deg, route 35c)
 DEBUG = os.getenv("DEBUG") is not None
 
 
