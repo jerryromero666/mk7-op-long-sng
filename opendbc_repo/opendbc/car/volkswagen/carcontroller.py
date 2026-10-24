@@ -216,6 +216,14 @@ class MQBStandstillManager:
       self._announce_seen = False
       self._stop_announced = False
       self._announced_hold = False
+    # The soft stop enters openpilot's stopping state at about 2.6 mph, above ANNOUNCE_SPEED, so the raw stopping bits
+    # went out before the announcement could start: ACC_06 Anhalten with HMS 1 (mqbcan), the combination that makes
+    # the TSK drop its brake torque. Route 370 #15 (-4 %): TSK target +0.2 and its braking bit off for 0.6 s while
+    # openpilot asked -0.95, the car sped up 1.5 -> 1.8 mph and rolled 1.2 m before the brakes came back (also #12, flat).
+    # Until this stop's announcement can start, the frames are those of a car braking in pid: no Anhalten, no hold
+    # request. Below ANNOUNCE_SPEED, the announcement, a standstill re-engage and the parent machine are unchanged.
+    if hms_active and stopping and not self._stop_announced and self._announce_frames == 0 and v >= self.ANNOUNCE_SPEED:
+      stopping = False
     if hms_active and not self._stop_announced and not starting:
       if self._announce_frames > 0 or (self.ANNOUNCE_MIN_SPEED <= v < self.ANNOUNCE_SPEED and (accel < 0 or stopping)):
         if self._announce_frames > 0:   # bit 63 counts only as an answer to our HMS 1
