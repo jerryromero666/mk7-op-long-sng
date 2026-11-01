@@ -21,13 +21,20 @@ LongCtrlState = car.CarControl.Actuators.LongControlState
 # braking hard in the last metres) gives the stock ramp. More than SOFT_MAX_T s rolling in the stopping state (a car
 # slow to answer the soft request, a steep downhill) moves the request on to stopAccel, but at the soft stop rate:
 # a long soft stop must not end in the stock 0.13 s snap (sim: 4-8 % of the soft stops lasted over 3 s).
-# Live: /data/stop_soft holds the soft stop rate in m/s3 (default 1.5, clamped SOFT_RATE_LIMITS); no file or an
-# unreadable file = the default; "0" (or any number <= 0) = off = the stock stopping ramp, bit for bit.
+# Live: /data/stop_soft holds "<rate> [<end>]": the soft stop rate in m/s3 (default 1.5, clamped SOFT_RATE_LIMITS) and
+# the end floor, the weakest braking it eases to before the wheels stop, in m/s2 (default SOFT_MIN, clamped
+# SOFT_MIN_LIMITS); no file or an unreadable file = the defaults; a rate of "0" (or any number <= 0) = off = the stock
+# stopping ramp, bit for bit. The end floor was 0.4: drives 395-3a3 (21 stops) felt the brakes let go just before the
+# stop ('stop gap'); the stop check showed no TSK release there, but the request eased from -0.95 to -0.40 in the last
+# 0.5 s and the car floated at 1 -> 0 mph (sim: braking dropped 0.2-0.35 before the stop, 1.4 s from 1 mph to 0 when
+# rolling up to a stopped car). At 0.8 it drops 0.07-0.12 and stops 0.6-0.7 s after 1 mph (stock -1.2: 0.5 s, the
+# bump). "1.5 0.4" = the earlier soft stop.
 SOFT_FILE = '/data/stop_soft'
 SOFT_DEFAULT = 1.5
 SOFT_RATE_LIMITS = (0.5, 6.0)  # m/s3
 SOFT_PERIOD = 100              # updates between file reads (1 s at 100 Hz)
-SOFT_MIN = 0.4                 # m/s2
+SOFT_MIN = 0.8                 # m/s2: default end floor
+SOFT_MIN_LIMITS = (0.4, 1.2)   # m/s2
 SOFT_DIST = 1.0                # m
 SOFT_EASE_RATE = 1.0           # m/s3
 SOFT_URGENT = -1.25            # m/s2 (just past stopAccel: the soft stop tracks requests down to stopAccel)
@@ -63,17 +70,18 @@ def read_roll_guard():
 
 
 def read_soft_stop():
-  # soft stop rate in m/s3, 0.0 = off
+  # (soft stop rate in m/s3, 0.0 = off; end floor in m/s2)
   try:
     with open(SOFT_FILE) as f:
       vals = [float(v) for v in f.read().split()]
   except (OSError, ValueError):
-    return SOFT_DEFAULT
-  if len(vals) != 1 or not np.isfinite(vals[0]):
-    return SOFT_DEFAULT
+    return SOFT_DEFAULT, SOFT_MIN
+  if len(vals) not in (1, 2) or not all(np.isfinite(vals)):
+    return SOFT_DEFAULT, SOFT_MIN
+  end = float(np.clip(vals[1], *SOFT_MIN_LIMITS)) if len(vals) == 2 else SOFT_MIN
   if vals[0] <= 0.0:
-    return 0.0
-  return float(np.clip(vals[0], *SOFT_RATE_LIMITS))
+    return 0.0, end
+  return float(np.clip(vals[0], *SOFT_RATE_LIMITS)), end
 
 
 def long_control_state_trans(CP, CP_SP, active, long_control_state, v_ego,
@@ -123,6 +131,7 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.soft_rate = SOFT_DEFAULT
+    self.soft_min = SOFT_MIN
     self.soft_cnt = 0
     self.stop_t = 0.0
     self.roll_on = True
@@ -163,7 +172,7 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     if self.soft_cnt % SOFT_PERIOD == 0:
-      self.soft_rate = read_soft_stop()
+      self.soft_rate, self.soft_min = read_soft_stop()
       self.roll_on = read_roll_guard()
     self.soft_cnt += 1
 
@@ -183,8 +192,8 @@ class LongControl:
       soft = self.soft_rate > 0.0 and CS.vEgo > self.CP.vEgoStarting and a_target >= SOFT_URGENT
       if soft and self.stop_t <= SOFT_MAX_T:
         # soft stop (see SOFT_* above)
-        target = min(a_target, -SOFT_MIN, -CS.vEgo**2 / (2 * SOFT_DIST))
-        target = float(np.clip(target, self.CP.stopAccel, -SOFT_MIN))
+        target = min(a_target, -self.soft_min, -CS.vEgo**2 / (2 * SOFT_DIST))
+        target = float(np.clip(target, self.CP.stopAccel, -self.soft_min))
         if output_accel > target:
           output_accel = max(min(output_accel, 0.0) - self.soft_rate * DT_CTRL, target)
         elif self.CP.stopAccel < output_accel < target:
