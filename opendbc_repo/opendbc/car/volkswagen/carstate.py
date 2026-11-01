@@ -26,8 +26,17 @@ class CarState(CarStateBase):
     self.upscale_lead_car_signal = False
     self.eps_stock_values = False
     self.acc_type = 0
+    self.enable_blocked = False  # brake pressed while moving: the panda would refuse controls (see update_button_enable)
+    self._brake_off_frames = 100   # frames since the brake was last pressed
 
   def update_button_enable(self, buttonEvents: list[structs.CarState.ButtonEvent]):
+    # The panda allows controls on the same button edge but drops them at once while the brake is pressed and any
+    # wheel turns (safety.h: brake_pressed && vehicle_moving). Openpilot (MADS) would still engage once the brake is
+    # released and send frames the panda refuses: route 3a2 at 29 mph, -11 %, SET with the brake held -> 54 refused
+    # ACC_06/07 frames in 0.5 s -> TSK 7 (permanent cruise fault). So that press does not engage; press again after
+    # releasing the brake. At a standstill (wheels at 0) the panda keeps controls, so SET at a stop is unchanged.
+    if self.enable_blocked:
+      return False
     if not self.CP.pcmCruise:
       for b in buttonEvents:
         # Enable OP long on falling edge of enable buttons
@@ -134,6 +143,10 @@ class CarState(CarStateBase):
     ret.seatbeltUnlatched = pt_cp.vl["Airbag_02"]["AB_Gurtschloss_FA"] != 3
 
     ret.standstill = ret.vEgoRaw == 0
+    # the panda's brake_pressed && vehicle_moving, plus 0.2 s after the brake is released: Motor_14 (one of its two brake
+    # signals) comes at 10 Hz, so the panda can still see the brake for up to 0.1 s after this side stopped seeing it
+    self._brake_off_frames = 0 if ret.brakePressed else min(self._brake_off_frames + 1, 100)
+    self.enable_blocked = self._brake_off_frames < 20 and not ret.standstill
     ret.cruiseState.standstill = self.CP.pcmCruise and self.esp_hold_confirmation
     ret.cruiseState.nonAdaptive = acc_limiter_mode or speed_limiter_mode
     if ret.cruiseState.speed > 90:
