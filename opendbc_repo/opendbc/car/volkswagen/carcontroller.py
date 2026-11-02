@@ -44,6 +44,29 @@ def read_decline_threshold() -> float:
   return float(np.clip(vals[0], *DECLINE_LIMITS))
 
 
+# Announcement speed (see MQBStandstillManager.ANNOUNCE_*). Once the announcement is answered (bit 63) the hold goes to
+# HMS 4 + ACC_07 Anfahren, and from that frame on this car brakes far less than asked while it still rolls, although the
+# TSK target stays at the request: drives 3a6 / 3a9 (t2_stop_release), announced at 0.8-0.9 m/s: wheels -0.75 -> -0.43
+# with -0.95 asked for the last 1.6 s on the flat (+0.8 %), -0.82 -> +0.14 on -4 % (sped up, rolled 1.4 m): 'slow down,
+# (nearly) stop, roll, stop' on every stop. Announced at ANNOUNCE_DEFAULT the car keeps openpilot's braking down to
+# about 1 mph and the weak part is the last few tenths of a second. Live: /data/announce_speed in m/s (clamped
+# ANNOUNCE_LIMITS; 0.9 = the earlier announcement), no file or junk = the default; read ~once a second.
+ANNOUNCE_FILE = '/data/announce_speed'
+ANNOUNCE_DEFAULT = 0.5       # m/s
+ANNOUNCE_LIMITS = (0.4, 0.9)
+
+
+def read_announce_speed() -> float:
+  try:
+    with open(ANNOUNCE_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return ANNOUNCE_DEFAULT
+  if len(vals) != 1 or not np.isfinite(vals[0]):
+    return ANNOUNCE_DEFAULT
+  return float(np.clip(vals[0], *ANNOUNCE_LIMITS))
+
+
 class HCAMitigation:
   """
   Manages HCA fault mitigations for VW/Audi EPS racks:
@@ -116,7 +139,8 @@ class MQBStandstillManager:
   # Route 33d (announcing at RJ's 2.6 m/s): once HMS=4 latched the car stopped slowing (2.59 -> 2.55
   # m/s in 0.4 s with -0.8 asked) and the driver had to brake on every approach. HMS=4 only brakes weakly
   # on this car, so it must latch at the parent's speed (it latched at 0.6-1.0 m/s and stopped fine).
-  ANNOUNCE_SPEED = 0.9         # m/s: start the announcement below this while braking (parent latched at 0.6-1.0)
+  # ANNOUNCE_SPEED: start the announcement below this while braking (was 0.9: the parent latched at 0.6-1.0); now the live
+  # value self._ann_speed (ANNOUNCE_FILE above), which must stay above ANNOUNCE_MIN_SPEED
   ANNOUNCE_MIN_SPEED = 0.3     # m/s: never announce slower, so it always ends before the wheels stop
   ANNOUNCE_FRAMES = 20         # 0.4 s at 50 Hz: the window in front of every fault-free hold (332/333)
   # SET at a stop: openpilot engaged (preEnabled) with the car already stopped and the driver on the brake, so the
@@ -151,6 +175,7 @@ class MQBStandstillManager:
     self._prev_hms_active = False
     self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
     self._decl_threshold = DECLINE_DEFAULT
+    self._ann_speed = ANNOUNCE_DEFAULT   # m/s (see ANNOUNCE_FILE)
     self._decl_cnt = 0
     self._decline = False        # on a decline (Motor_16)
     self._decl_on = False        # decline brake latched in this announced hold
@@ -160,6 +185,7 @@ class MQBStandstillManager:
   def _update_decline(self, CS, accel: float) -> None:
     if self._decl_cnt % DECLINE_PERIOD == 0:
       self._decl_threshold = read_decline_threshold()
+      self._ann_speed = read_announce_speed()
     self._decl_cnt += 1
     self._decl_push = 0 if accel > self.DECLINE_PUSH else min(self._decl_push + 1, self.DECLINE_HOLDOFF)
     if self._decl_threshold <= 0.0 or not getattr(CS, 'tsk_grade_valid', False):
@@ -228,13 +254,13 @@ class MQBStandstillManager:
       self._stop_announced = False
       self._still_announce = False
       self._announced_hold = False
-    # The soft stop enters openpilot's stopping state at about 2.6 mph, above ANNOUNCE_SPEED, so the raw stopping bits
+    # The soft stop enters openpilot's stopping state at about 2.6 mph, above the announcement speed, so the raw stopping bits
     # went out before the announcement could start: ACC_06 Anhalten with HMS 1 (mqbcan), the combination that makes
     # the TSK drop its brake torque. Route 370 #15 (-4 %): TSK target +0.2 and its braking bit off for 0.6 s while
     # openpilot asked -0.95, the car sped up 1.5 -> 1.8 mph and rolled 1.2 m before the brakes came back (also #12, flat).
     # Until this stop's announcement can start, the frames are those of a car braking in pid: no Anhalten, no hold
-    # request. Below ANNOUNCE_SPEED, the announcement, a standstill re-engage and the parent machine are unchanged.
-    if hms_active and stopping and not self._stop_announced and self._announce_frames == 0 and v >= self.ANNOUNCE_SPEED:
+    # request. Below the announcement speed, the announcement, a standstill re-engage and the parent machine are unchanged.
+    if hms_active and stopping and not self._stop_announced and self._announce_frames == 0 and v >= self._ann_speed:
       stopping = False
     held = hms_active and v < self.STILL_V and CS.out.brakePressed
     if held and not self._prev_hms_active and not self._stop_announced:
@@ -244,7 +270,7 @@ class MQBStandstillManager:
     # after SET at the stop the plan sat in pid under 0.5 m/s, i.e. 'starting', and HMS went straight to 4)
     if hms_active and not self._stop_announced and (not starting or held):
       if self._announce_frames > 0 or self._still_announce or \
-         (self.ANNOUNCE_MIN_SPEED <= v < self.ANNOUNCE_SPEED and (accel < 0 or stopping)):
+         (self.ANNOUNCE_MIN_SPEED <= v < self._ann_speed and (accel < 0 or stopping)):
         if self._announce_frames > 0:   # bit 63 counts only as an answer to our HMS 1
           self._announce_seen = self._announce_seen or bool(getattr(CS, 'esp_stopping', False))
         if self._still_announce:
