@@ -56,6 +56,28 @@ ANNOUNCE_DEFAULT = 0.5       # m/s
 ANNOUNCE_LIMITS = (0.4, 0.9)
 
 
+# ACC_06 in the announced hold. The announcement sends ACC_06 Anfahren (RJ: so the TSK keeps its brake torque); the
+# announced hold then switched ACC_06 to openpilot's bits (Anhalten in the stopping state, the decline brake too), and at
+# that switch the TSK drops its brake torque and rebuilds it over ~0.5 s (RJ, commaai/opendbc #3322: TSK brake force is
+# jerk-limited and takes about a second to build; releasing is instant). Drive 3ba (t2_stop_release, announced at
+# 0.45 m/s): TSK target -0.9 -> -0.2 / +0.1 and its braking bit off for 0.3-0.5 s on every stop, the car floated at
+# 0.6 mph on the flat and sped up 0.7 -> 1.0 mph on -4 %, 0.8 -> 1.9 mph on -13.6 % (rolled 1.7 m). Keeping ACC_06 in
+# Anfahren with openpilot's (negative) request for the whole announced hold, as RJ's MqbLongStateMachine does ("to
+# prevent brake torque from zeroing itself out by keeping TSK in starting state"), leaves no bit change at the latch,
+# at the stop or at the launch. Live: /data/hold_starting "0" = ACC_06 as before (openpilot's bits / the decline
+# brake's Anhalten); no file or anything else = on; read ~once a second.
+HOLD_START_FILE = '/data/hold_starting'
+
+
+def read_hold_starting() -> bool:
+  try:
+    with open(HOLD_START_FILE) as f:
+      vals = [float(v) for v in f.read().split()]
+  except (OSError, ValueError):
+    return True
+  return not (len(vals) == 1 and vals[0] == 0.0)
+
+
 def read_announce_speed() -> float:
   try:
     with open(ANNOUNCE_FILE) as f:
@@ -176,6 +198,7 @@ class MQBStandstillManager:
     self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
     self._decl_threshold = DECLINE_DEFAULT
     self._ann_speed = ANNOUNCE_DEFAULT   # m/s (see ANNOUNCE_FILE)
+    self._hold_start = True              # ACC_06 Anfahren in the announced hold (see HOLD_START_FILE)
     self._decl_cnt = 0
     self._decline = False        # on a decline (Motor_16)
     self._decl_on = False        # decline brake latched in this announced hold
@@ -186,6 +209,7 @@ class MQBStandstillManager:
     if self._decl_cnt % DECLINE_PERIOD == 0:
       self._decl_threshold = read_decline_threshold()
       self._ann_speed = read_announce_speed()
+      self._hold_start = read_hold_starting()
     self._decl_cnt += 1
     self._decl_push = 0 if accel > self.DECLINE_PUSH else min(self._decl_push + 1, self.DECLINE_HOLDOFF)
     if self._decl_threshold <= 0.0 or not getattr(CS, 'tsk_grade_valid', False):
@@ -291,6 +315,9 @@ class MQBStandstillManager:
     if hms_active and self._announced_hold and not CS.esp_hold_confirmation:
       self._prev_hold_confirmation = CS.esp_hold_confirmation
       decl = self._decline_brake(accel, stopping, v)
+      if self._hold_start:
+        # HMS 4, ACC_07 Anfahren, d 20.46; ACC_06 Anfahren as in the announcement (see HOLD_START_FILE)
+        return long_active, (decl if decl is not None else accel), False, True, True, False
       if decl is not None:
         return long_active, decl, True, False, True, False              # decline brake: ACC_06 Anhalten (see DECLINE_FILE)
       return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
