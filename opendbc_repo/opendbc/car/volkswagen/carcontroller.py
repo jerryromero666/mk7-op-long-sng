@@ -66,16 +66,25 @@ ANNOUNCE_LIMITS = (0.4, 0.9)
 # prevent brake torque from zeroing itself out by keeping TSK in starting state"), leaves no bit change at the latch,
 # at the stop or at the launch. Live: /data/hold_starting "0" = ACC_06 as before (openpilot's bits / the decline
 # brake's Anhalten); no file or anything else = on; read ~once a second.
+# Launch from that hold: drive 3be (1f6f641) launched much slower. With ACC_06 already in Anfahren the launch had no
+# Anhalten -> Anfahren edge, the change on which the TSK lets go of its brake torque at once (hold trace 350: every such
+# edge dropped the torque to 0 within a frame), so the brake came off along the request ramp. On the frame openpilot
+# drives off from the hold (on a decline: once the decline brake lets the launch through), one frame of the earlier hold
+# bits (Anhalten with the previous request) goes out, then Anfahren with openpilot's request: the frames of a launch
+# before this change, one frame (20 ms) later. "1" in the file = the steady Anfahren without that launch edge.
 HOLD_START_FILE = '/data/hold_starting'
 
 
-def read_hold_starting() -> bool:
+def read_hold_starting() -> int:
+  # 0 = off (ACC_06 as before), 1 = steady Anfahren only, 2 = steady Anfahren + the launch edge (default)
   try:
     with open(HOLD_START_FILE) as f:
       vals = [float(v) for v in f.read().split()]
   except (OSError, ValueError):
-    return True
-  return not (len(vals) == 1 and vals[0] == 0.0)
+    return 2
+  if len(vals) == 1 and vals[0] in (0.0, 1.0):
+    return int(vals[0])
+  return 2
 
 
 def read_announce_speed() -> float:
@@ -198,7 +207,9 @@ class MQBStandstillManager:
     self._announced_hold = False # announced and acknowledged: HMS=4 until vEgo > RELEASE_SPEED
     self._decl_threshold = DECLINE_DEFAULT
     self._ann_speed = ANNOUNCE_DEFAULT   # m/s (see ANNOUNCE_FILE)
-    self._hold_start = True              # ACC_06 Anfahren in the announced hold (see HOLD_START_FILE)
+    self._hold_start = 2                 # ACC_06 Anfahren in the announced hold (see HOLD_START_FILE)
+    self._hold_launch = False            # the launch edge of this hold went out
+    self._hold_accel = 0.0               # last request sent in the announced hold
     self._decl_cnt = 0
     self._decline = False        # on a decline (Motor_16)
     self._decl_on = False        # decline brake latched in this announced hold
@@ -278,6 +289,7 @@ class MQBStandstillManager:
       self._stop_announced = False
       self._still_announce = False
       self._announced_hold = False
+      self._hold_launch = False
     # The soft stop enters openpilot's stopping state at about 2.6 mph, above the announcement speed, so the raw stopping bits
     # went out before the announcement could start: ACC_06 Anhalten with HMS 1 (mqbcan), the combination that makes
     # the TSK drop its brake torque. Route 370 #15 (-4 %): TSK target +0.2 and its braking bit off for 0.6 s while
@@ -317,7 +329,14 @@ class MQBStandstillManager:
       decl = self._decline_brake(accel, stopping, v)
       if self._hold_start:
         # HMS 4, ACC_07 Anfahren, d 20.46; ACC_06 Anfahren as in the announcement (see HOLD_START_FILE)
-        return long_active, (decl if decl is not None else accel), False, True, True, False
+        launch = decl is None and not stopping and (starting or accel > 0.0)
+        if launch and not self._hold_launch and self._hold_start == 2:
+          self._hold_launch = True
+          return long_active, self._hold_accel, True, False, True, False   # one frame of the earlier hold bits
+        if not launch:
+          self._hold_launch = False
+        self._hold_accel = decl if decl is not None else accel
+        return long_active, self._hold_accel, False, True, True, False
       if decl is not None:
         return long_active, decl, True, False, True, False              # decline brake: ACC_06 Anhalten (see DECLINE_FILE)
       return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
