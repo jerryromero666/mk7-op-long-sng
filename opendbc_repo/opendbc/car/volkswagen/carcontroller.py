@@ -72,7 +72,12 @@ ANNOUNCE_LIMITS = (0.4, 0.9)
 # drives off from the hold (on a decline: once the decline brake lets the launch through), one frame of the earlier hold
 # bits (Anhalten with the previous request) goes out, then Anfahren with openpilot's request: the frames of a launch
 # before this change, one frame (20 ms) later. "1" in the file = the steady Anfahren without that launch edge.
+# The edge goes out only for a real launch: openpilot asking for more than 0 for HOLD_EDGE_FRAMES in a row. Drive on
+# 90a7eac: pressing +/- at a stop made the tachometer jump to 3000 rpm for a few seconds (nothing moved): a short
+# stopping -> pid blip of the plan fired the edge, and the TSK took it as a drive-off. Such blips last one or two
+# planner updates (0.05-0.1 s); a launch asks for more than 0 from its first frame and keeps asking.
 HOLD_START_FILE = '/data/hold_starting'
+HOLD_EDGE_FRAMES = 6         # 0.12 s at 50 Hz
 
 
 def read_hold_starting() -> int:
@@ -209,7 +214,8 @@ class MQBStandstillManager:
     self._ann_speed = ANNOUNCE_DEFAULT   # m/s (see ANNOUNCE_FILE)
     self._hold_start = 2                 # ACC_06 Anfahren in the announced hold (see HOLD_START_FILE)
     self._hold_launch = False            # the launch edge of this hold went out
-    self._hold_accel = 0.0               # last request sent in the announced hold
+    self._hold_brake = 0.0               # last braking request sent in the announced hold
+    self._hold_go = 0                    # frames in a row openpilot asked for more than 0 in the announced hold
     self._decl_cnt = 0
     self._decline = False        # on a decline (Motor_16)
     self._decl_on = False        # decline brake latched in this announced hold
@@ -329,14 +335,17 @@ class MQBStandstillManager:
       decl = self._decline_brake(accel, stopping, v)
       if self._hold_start:
         # HMS 4, ACC_07 Anfahren, d 20.46; ACC_06 Anfahren as in the announcement (see HOLD_START_FILE)
-        launch = decl is None and not stopping and (starting or accel > 0.0)
-        if launch and not self._hold_launch and self._hold_start == 2:
+        go = decl is None and not stopping and accel > 0.0
+        self._hold_go = self._hold_go + 1 if go else 0
+        if stopping:
+          self._hold_launch = False      # back to a stop: the next launch gets its edge again
+        if go and self._hold_go >= HOLD_EDGE_FRAMES and not self._hold_launch and self._hold_start == 2:
           self._hold_launch = True
-          return long_active, self._hold_accel, True, False, True, False   # one frame of the earlier hold bits
-        if not launch:
-          self._hold_launch = False
-        self._hold_accel = decl if decl is not None else accel
-        return long_active, self._hold_accel, False, True, True, False
+          return long_active, self._hold_brake, True, False, True, False   # one frame of the earlier hold bits
+        out = decl if decl is not None else accel
+        if out <= 0.0:
+          self._hold_brake = out
+        return long_active, out, False, True, True, False
       if decl is not None:
         return long_active, decl, True, False, True, False              # decline brake: ACC_06 Anhalten (see DECLINE_FILE)
       return long_active, accel, stopping, starting, True, False        # HMS 4, ACC_07 Anfahren, d 20.46 (ACC_06: OP's bits)
