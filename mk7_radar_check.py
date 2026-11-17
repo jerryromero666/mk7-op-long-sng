@@ -44,7 +44,7 @@ import bz2       # noqa: E402
 import os        # noqa: E402
 import re        # noqa: E402
 
-TOOL_VERSION = '1.3 (2026-11-17)'
+TOOL_VERSION = '1.3.1 (2026-11-17)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
@@ -383,15 +383,21 @@ class Replay:
     self.state_time = {}      # radar ACC state -> seconds
     self.rate = {}            # (address, radar ACC state) -> frames
     self.route = '?'
+    self.drive_route = None
     self.branch = '?'
     self.op_long = None
     self.last_t = -1.0
     self.new_drive()
 
-  def new_drive(self):
-    self.drive_t0 = None
-    self.prev_st = None
+  def new_drive(self, same_route=False):
+    """A new drive starts from scratch. A gap inside one drive (minutes not read) keeps the drive's clock and the
+    radar's last state, so a change across the gap is still a change and not a fresh start."""
+    if not same_route:
+      self.drive_t0 = None
+      self.prev_st = None
+      self.drive_route = self.route
     self.prev_st_t = None
+    self.last_can_t = None
     self.presses = {}
     self.btn_prev = 0
     self.tsk = self.ost = self.txt = self.txt4 = self.op_accel = NAN
@@ -407,7 +413,8 @@ class Replay:
 
   def on_can(self, t, evt):
     got_radar = False
-    dt = min(max(t - self.last_t, 0.0), 0.2)
+    dt = min(max(t - self.last_can_t, 0.0), 0.2) if self.last_can_t is not None else 0.0
+    self.last_can_t = max(t, self.last_can_t) if self.last_can_t is not None else t
     cur = int(self.st) if self.st == self.st else -1
     self.state_time[cur] = self.state_time.get(cur, 0.0) + dt
     for c in evt.can:
@@ -505,8 +512,8 @@ class Replay:
       t = evt.logMonoTime * 1e-9
       # A log is not in strict time order: a message is stamped when it is made and written when it is sent
       # (modelV2 tens of ms later). Only a big jump either way is a new drive, which starts from scratch as the car does.
-      if abs(t - self.last_t) > NEW_DRIVE_GAP:
-        self.new_drive()
+      if abs(t - self.last_t) > NEW_DRIVE_GAP or self.route != self.drive_route:
+        self.new_drive(same_route=self.route == self.drive_route)
         self.last_t = t
       if self.drive_t0 is None:
         self.drive_t0 = t
@@ -928,7 +935,7 @@ def report(R, names, branch, file_now, msgs):
   say("6. WHEN AND WHY THE RADAR'S OWN CRUISE CONTROL FAULTS")
   say('   time in each state: ' + ', '.join(f"{state_name(k) if k >= 0 else 'no ACC_06'} {v / 60.0:.1f} min" for k, v in R['state_s'].items()))
   if R['fault_at_start']:
-    say(f"   already faulted the first time it was seen in {len(R['fault_at_start'])} drive(s)")
+    say(f"   already faulted the first time it was seen in {len(R['fault_at_start'])} drive(s) (from an earlier drive, or right at start)")
   if not R['faults']:
     say('   no change into a fault in these drives')
   else:
@@ -996,7 +1003,10 @@ def report(R, names, branch, file_now, msgs):
   say(f"search_v={hits('v', 3)}")
   say(f"states={','.join(f'{k}:{v / 60.0:.1f}' for k, v in R['state_s'].items())} faults={len(R['faults'])} at_start={len(R['fault_at_start'])}"
       f" why={','.join(f'{WHY_TOK[k]}{v}' for k, v in R['why'].items() if v)}")
-  say('tl=' + ' '.join(transition_tok(x) for x in R['tl'][:24]) + (f" (+{len(R['tl']) - 24})" if len(R['tl']) > 24 else ''))
+  changes = [x for x in R['tl'] if x['frm'] is not None]
+  first = ','.join(f"{rid(x['route'])}:{x['to']}" for x in R['tl'] if x['frm'] is None)
+  say(f"first_seen={first}")
+  say('tl=' + ' '.join(transition_tok(x) for x in changes[:40]) + (f" (+{len(changes) - 40})" if len(changes) > 40 else ''))
   ai = R['act_idx']
   aa = R['act_acc']
   say(f"healthy={R['act_follow_s']:.0f}s bar={R['act_bar']}" + (f" idx={ai[0]:.3f}/{ai[1]:+.1f}/{ai[2]:.2f}/{ai[3]:.2f}/{ai[4]}" if ai else ' idx=n/a')
