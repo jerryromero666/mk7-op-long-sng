@@ -27,6 +27,8 @@ own drives, the things that cannot be known without the car:
   5. v1.1: if that one field is empty, is the distance anywhere else? It looks through every message on the radar's
      bus, every run of 8 to 16 bits, for a number that follows the camera's distance (or closing speed) to the car
      ahead, with our own speed taken out. It needs 2 minutes of driving behind a car, so parked drives say nothing.
+  v1.2: v1.0 and v1.1 read every real drive as parked (a message stamped a little earlier than the one before it
+     was taken for the start of a new drive, which reset the car's speed). Results from v1.0 / v1.1 don't count.
 The replay uses the same maths as the car (opendbc volkswagen/radar_interface.py and selfdrive/controls/radard.py).
 At the end there is a short block to paste back. Only reads logs. Writes nothing.
 """
@@ -39,7 +41,7 @@ import bz2       # noqa: E402
 import os        # noqa: E402
 import re        # noqa: E402
 
-TOOL_VERSION = '1.1 (2026-11-17)'
+TOOL_VERSION = '1.2 (2026-11-17)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
@@ -69,6 +71,7 @@ COLS = ('t', 'v_ego', 'op', 'raw', 'idx', 'st', 'acc', 'trk_d', 'trk_v', 'prob',
 # "driving behind a car": moving, the camera sure of a car this far ahead. What the search and the verdict need.
 FOLLOW_PROB, FOLLOW_V, FOLLOW_D, FOLLOW_MIN_S = 0.9, 2.0, (4.0, 120.0), 120.0
 STRONG = 0.9                 # search score from which a number really follows the car ahead
+NEW_DRIVE_GAP = 5.0          # s
 AUTO_MIN, AUTO_ROUTES = 15.0, 60   # auto: minutes of openpilot driving to collect, newest drives to look through
 
 np = None
@@ -421,8 +424,11 @@ class Replay:
   def read(self, events):
     for evt in events:
       t = evt.logMonoTime * 1e-9
-      if not 0.0 <= t - self.last_t < 5.0:   # a new drive starts from scratch, as the car does
+      # A log is not in strict time order: a message is stamped when it is made and written when it is sent
+      # (modelV2 tens of ms later). Only a big jump either way is a new drive, which starts from scratch as the car does.
+      if abs(t - self.last_t) > NEW_DRIVE_GAP:
         self.new_drive()
+        self.last_t = t
       which = evt.which()
       if which == 'can':
         self.on_can(t, evt)
@@ -438,7 +444,7 @@ class Replay:
         self.op_long = evt.carParams.openpilotLongitudinalControl
       elif which == 'initData':
         self.branch = evt.initData.gitBranch
-      self.last_t = t
+      self.last_t = max(self.last_t, t)
 
 
 def driven_by_segment(zstd, log, root, route, seg_nums):

@@ -146,3 +146,36 @@ def test_search_finds_a_distance_wherever_it_is(monkeypatch):
   assert start < 32 and start + size > 20                       # the window it reports overlaps the real field (bits 20-31)
   assert all(hit[0] < 0.6 for hit in found['d'][1:])            # our own speed and noise do not pass for a distance
   assert found['v'][0][1] == 0x111 and found['v'][0][0] > 0.9 and found['v'][0][7]   # signed
+
+
+def test_replay_survives_out_of_order_stamps(monkeypatch):
+  # a real log: modelV2 is stamped when the model starts and written ~40 ms later, after newer carState / carControl
+  def event(which, t, **kw):
+    e = log.Event.new_message(logMonoTime=int(t * 1e9))
+    msg = e.init(which)
+    for k, v in kw.items():
+      setattr(msg, k, v)
+    return e
+
+  def model(t):
+    e = log.Event.new_message(logMonoTime=int((t - 0.04) * 1e9))
+    lead = log.ModelDataV2.LeadDataV3.new_message(prob=0.99, x=[31.5], y=[0.0], v=[20.0], a=[0.0], xStd=[1.0], yStd=[1.0], vStd=[1.0])
+    e.init('modelV2').leadsV3 = [lead, lead, lead]
+    return e
+
+  events = []
+  for i in range(2000):
+    t = 1000.0 + i * 0.01
+    events += [event('carState', t, vEgo=20.0), event('carControl', t, longActive=True)]
+    if i % 5 == 4:
+      events.append(model(t))
+  events.append(event('carState', 2000.0, vEgo=0.0))           # a new drive, a long time later
+  events.append(model(2000.05))
+
+  replay = tool.Replay()
+  replay.read(events)
+  v_ego = [r[1] for r in replay.rows]
+  op = [r[2] for r in replay.rows]
+  assert len(replay.rows) == 401
+  assert all(v == 20.0 for v in v_ego[:400]) and all(o == 1.0 for o in op[:400])
+  assert v_ego[400] == 0.0 and op[400] == 0.0                   # the new drive did start from scratch
