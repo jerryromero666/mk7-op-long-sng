@@ -42,11 +42,13 @@ def test_can_decoding():
     _, dat, _ = packer.make_can_msg("ACC_04", 2, {"ACC_Abstand_Abstandswarner": distance, "ACC_Texte_Abstandswarner": text,
                                                   "ACC_Zeitluecke_Abstandswarner": 6.3, "ACC_Tempolimit": 31, "ACC_Charisma_FahrPr": 15})
     assert tool.acc_04(dat) == (distance, text)
-  _, dat, _ = packer.make_can_msg("ACC_02", 2, {"ACC_Abstandsindex": 777, "ACC_Wunschgeschw_02": 327.04, "ACC_Gesetzte_Zeitluecke": 7})
-  assert tool.acc_02(dat) == 777
+  _, dat, _ = packer.make_can_msg("ACC_02", 2, {"ACC_Abstandsindex": 777, "ACC_Wunschgeschw_02": 327.04, "ACC_Gesetzte_Zeitluecke": 7,
+                                                "ACC_Relevantes_Objekt": 2, "ACC_Display_Prio": 3, "ACC_Texte_Primaeranz": 127})
+  assert tool.acc_02(dat) == 777 and tool.acc_02_object(dat) == 2
   _, dat, _ = packer.make_can_msg("ACC_06", 2, {"ACC_Status_ACC": 3, "ACC_Sollbeschleunigung_02": -1.25, "ACC_Typ": 1, "ACC_Anhalten": 1})
   status, accel = tool.acc_06(dat)
   assert status == 3 and accel == pytest.approx(-1.25, abs=0.003)
+  assert tool.acc_typ(dat) == 1
   _, dat, _ = packer.make_can_msg("ESP_19", 0, {"ESP_VL_Radgeschw_02": 72.0, "ESP_VR_Radgeschw_02": 72.6, "ESP_HL_Radgeschw_02": 71.4,
                                                 "ESP_HR_Radgeschw_02": 72.0})
   assert tool.wheel_speed(dat) == pytest.approx(20.0, abs=0.01)
@@ -116,3 +118,31 @@ def test_fusion_copy_decides_the_same(monkeypatch):
     else:
       unused += 1
   assert used > 1000 and unused > 300
+
+
+def test_search_finds_a_distance_wherever_it_is(monkeypatch):
+  import numpy
+  monkeypatch.setattr(tool, "np", numpy)
+  rng = random.Random(2)
+  replay = tool.Replay()
+  for i in range(4000):
+    v_ego = 20.0 + 8.0 * math.sin(i / 400.0)
+    d = 1.5 * v_ego + 10.0 * math.sin(i / 90.0) + 12.0          # a time gap, plus the car ahead moving around in it
+    v_rel = 10.0 / 90.0 * math.cos(i / 90.0) * 20.0
+    replay.bus2 = {
+      0x111: (int(d * 8) & 0xFFF) << 20 | (int(v_rel * 10) & 0xFFF) << 36 | rng.randrange(256) << 52,   # the radar's target
+      0x222: int(v_ego * 100) << 16,                                                                    # a copy of our own speed
+      0x333: rng.randrange(1 << 48) << 12,                                                              # noise
+    }
+    replay.v_ego = v_ego
+    lead = log.ModelDataV2.LeadDataV3.new_message(prob=0.99, x=[d + tool.RADAR_TO_CAMERA + rng.uniform(-1, 1)], y=[0.0],
+                                                  v=[v_ego + v_rel + rng.uniform(-0.3, 0.3)], a=[0.0], xStd=[1.0], yStd=[1.0], vStd=[1.0])
+    model = log.ModelDataV2.new_message(leadsV3=[lead, lead, lead])
+    model.velocity.x = [v_ego]
+    replay.on_model(i * 0.05, model)
+  found = tool.search(replay)
+  score, addr, start, size = found['d'][0][:4]
+  assert addr == 0x111 and score > 0.95
+  assert start < 32 and start + size > 20                       # the window it reports overlaps the real field (bits 20-31)
+  assert all(hit[0] < 0.6 for hit in found['d'][1:])            # our own speed and noise do not pass for a distance
+  assert found['v'][0][1] == 0x111 and found['v'][0][0] > 0.9 and found['v'][0][7]   # signed
