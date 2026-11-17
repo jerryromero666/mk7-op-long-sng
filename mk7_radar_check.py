@@ -27,6 +27,9 @@ own drives, the things that cannot be known without the car:
   5. v1.1: if that one field is empty, is the distance anywhere else? It looks through every message on the radar's
      bus, every run of 8 to 16 bits, for a number that follows the camera's distance (or closing speed) to the car
      ahead, with our own speed taken out. It needs 2 minutes of driving behind a car, so parked drives say nothing.
+  6. v1.3: when and why the radar's own cruise control faults (each change of its state, with what the driver,
+     openpilot and the engine's cruise coordinator were doing then), and what the radar sends while it is still
+     healthy: the lead bar, its own accel request, and the search again on those stretches only.
   v1.2: v1.0 and v1.1 read every real drive as parked (a message stamped a little earlier than the one before it
      was taken for the start of a new drive, which reset the car's speed). Results from v1.0 / v1.1 don't count.
 The replay uses the same maths as the car (opendbc volkswagen/radar_interface.py and selfdrive/controls/radard.py).
@@ -41,7 +44,7 @@ import bz2       # noqa: E402
 import os        # noqa: E402
 import re        # noqa: E402
 
-TOOL_VERSION = '1.2 (2026-11-17)'
+TOOL_VERSION = '1.3 (2026-11-17)'
 OP_DIR = '/data/openpilot'
 ROOT = '/data/media/0/realdata'
 VENV_PYTHON = '/usr/local/venv/bin/python3'
@@ -59,6 +62,8 @@ MPH = 2.23694
 # CAN (vw_mqb.dbc). The radar is on bus 2 with the gateway harness, the wheel speeds on bus 0.
 PT_BUS, RADAR_BUS = 0, 2
 ESP_19, ACC_06, ACC_02, ACC_04 = 0x0B2, 0x122, 0x30C, 0x324
+TSK_06, GRA_ACC_01 = 0x120, 0x12B
+OP_TX_BUS = 128               # openpilot's own frames as the panda echoes them (bus 0 + 128)
 DISTANCE_MAX_VALID = 508     # 509 = free driving (no car), 510 = undefined, 511 = no display
 SIGNAL_TIMEOUT = 0.5         # s without a fresh ACC_04 before the radar track is dropped
 RADAR_TO_CAMERA = 1.52       # m, radard: the camera's lead distance is measured from the camera
@@ -67,9 +72,21 @@ ACC_STATUS = {0: 'off', 1: 'init', 2: 'standby', 3: 'active', 4: 'override', 5: 
 SPEEDS = ((-1.0, 0.3, 'stopped'), (0.3, 5.0, 'under 11 mph'), (5.0, 15.0, '11-34 mph'), (15.0, 25.0, '34-56 mph'), (25.0, 99.0, 'over 56 mph'))
 RANGES = ((0, 20), (20, 40), (40, 60), (60, 100), (100, 250))
 COLS = ('t', 'v_ego', 'op', 'raw', 'idx', 'st', 'acc', 'trk_d', 'trk_v', 'prob', 'vis_d', 'vis_v', 'trusted', 'fus_d', 'fus_v', 'log_radar',
-        'obj', 'typ')
+        'obj', 'typ', 'op_acc', 'tsk', 'ost', 'txt')
+BUTTONS = (('MAIN', 12), ('CANCEL', 13), ('SET', 16), ('UP', 17), ('DOWN', 18), ('RES', 19))   # GRA_ACC_01 bits
+BUTTON_WINDOW = 3.0          # s: a press this long before a radar state change is shown with it
+TSK_STATUS = {0: 'init', 1: 'off', 2: 'ready', 3: 'controlling', 4: 'gas override', 5: 'brake only', 6: 'fault', 7: 'fault (permanent)'}
+RADAR_TEXT = {0: '', 1: 'ACC not available', 10: 'ACC ready', 11: 'no distance control', 12: 'ACC sensor view', 13: 'ACC not available',
+              16: 'ESP intervention', 18: 'parking brake', 19: 'speed limit', 20: 'gear lever', 24: 'ACC shutdown', 26: '!',
+              30: 'confirm drive-off', 31: 'vehicle lost', 32: 'not possible at standstill', 33: 'invalid drive-off command',
+              34: 'door open', 35: 'seatbelt', 36: 'gear lever', 48: 'take over!', 53: 'ACC off', 54: 'ACC starting', 56: 'ACC fault',
+              57: 'ACC stopping!', 58: 'press the brake!', 65: 'brake holding!', 66: 'ESP passive!', 67: 'ACC ready to drive off'}
+WHY_TOK = {'SET': 'SET', 'RES': 'RES', 'other button': 'btn', 'openpilot just engaged': 'op_on', 'openpilot just disengaged': 'op_off',
+           'brake': 'brk', 'nothing of these': 'none'}
+HEALTHY_MIN_S = 60.0         # s of driving behind a car with the radar active before its outputs are judged
 # "driving behind a car": moving, the camera sure of a car this far ahead. What the search and the verdict need.
 FOLLOW_PROB, FOLLOW_V, FOLLOW_D, FOLLOW_MIN_S = 0.9, 2.0, (4.0, 120.0), 120.0
+MIN_KINDS = 8                # different values a field needs before it can count as a distance or speed reading
 STRONG = 0.9                 # search score from which a number really follows the car ahead
 NEW_DRIVE_GAP = 5.0          # s
 AUTO_MIN, AUTO_ROUTES = 15.0, 60   # auto: minutes of openpilot driving to collect, newest drives to look through
@@ -206,6 +223,21 @@ def acc_02(dat):
 def acc_02_object(dat):
   """ACC_02: the cluster's lead symbol (ACC_Relevantes_Objekt, 0 = off)."""
   return bits(dat, 46, 2)
+
+
+def acc_02_text(dat):
+  """ACC_02: the radar's main cluster text (ACC_Texte_Primaeranz)."""
+  return bits(dat, 48, 7)
+
+
+def acc_04_text(dat):
+  """ACC_04: the radar's ACC text (ACC_Texte)."""
+  return bits(dat, 27, 5)
+
+
+def tsk_status(dat):
+  """TSK_06: the engine's cruise coordinator state (TSK_Status: 2 ready, 3 controlling, 6/7 fault)."""
+  return bits(dat, 24, 3)
 
 
 def acc_typ(dat):
@@ -346,12 +378,25 @@ class Replay:
     self.scan_n = 0           # frames kept for the search: moving, camera sure of a car 4-120 m ahead
     self.scan_d, self.scan_v, self.scan_e = array('d'), array('d'), array('d')
     self.scan_addr = {}       # address -> array('Q'), one payload per kept frame
+    self.scan_st = array('d')  # the radar's ACC state at each kept frame (-1 unknown)
+    self.timeline = []        # every change of the radar's ACC state, with what was going on
+    self.state_time = {}      # radar ACC state -> seconds
+    self.rate = {}            # (address, radar ACC state) -> frames
+    self.route = '?'
     self.branch = '?'
     self.op_long = None
     self.last_t = -1.0
     self.new_drive()
 
   def new_drive(self):
+    self.drive_t0 = None
+    self.prev_st = None
+    self.prev_st_t = None
+    self.presses = {}
+    self.btn_prev = 0
+    self.tsk = self.ost = self.txt = self.txt4 = self.op_accel = NAN
+    self.brake = False
+    self.op_t = None
     self.tracker = LeadDistanceTracker()
     self.fusion = Fusion()
     self.v_wheel = self.v_ego = 0.0
@@ -362,11 +407,26 @@ class Replay:
 
   def on_can(self, t, evt):
     got_radar = False
+    dt = min(max(t - self.last_t, 0.0), 0.2)
+    cur = int(self.st) if self.st == self.st else -1
+    self.state_time[cur] = self.state_time.get(cur, 0.0) + dt
     for c in evt.can:
       src = c.src
       if src == PT_BUS:
-        if c.address == ESP_19:
+        addr = c.address
+        if addr == ESP_19:
           self.v_wheel = wheel_speed(c.dat)
+        elif addr == TSK_06:
+          self.tsk = tsk_status(c.dat)
+        elif addr == GRA_ACC_01:
+          val = int.from_bytes(c.dat, 'little')
+          for name, bit in BUTTONS:
+            if (val >> bit) & 1 and not (self.btn_prev >> bit) & 1:
+              self.presses[name] = t
+          self.btn_prev = val
+      elif src == OP_TX_BUS:
+        if c.address == ACC_06:
+          self.ost = acc_06(c.dat)[0]
       elif src == RADAR_BUS:
         addr, dat = c.address, c.dat
         if len(dat) > 8:
@@ -374,18 +434,22 @@ class Replay:
         val = int.from_bytes(dat, 'little')
         self.bus2[addr] = val
         self.bus2_n[addr] = self.bus2_n.get(addr, 0) + 1
+        self.rate[(addr, cur)] = self.rate.get((addr, cur), 0) + 1
         if addr == ACC_04:
           self.raw, text = acc_04(dat)
+          self.txt4 = acc_04_text(dat)
           got_radar = True
           if len(self.a04) < 5000 or (val >> 16) in self.a04:
             self.a04[val >> 16] = self.a04.get(val >> 16, 0) + 1
         elif addr == ACC_02:
           self.idx, self.obj = acc_02(dat), acc_02_object(dat)
+          self.txt = acc_02_text(dat)
         elif addr == ACC_06:
           self.st, self.acc = acc_06(dat)
           self.typ = acc_typ(dat)
+          self.on_state(t)
     # the same steps as RadarInterface.update
-    self.tracker.predict(min(max(t - self.last_t, 0.0), 0.2), self.v_wheel)
+    self.tracker.predict(dt, self.v_wheel)
     if got_radar:
       self.radar_t = t
       if 0 < self.raw <= DISTANCE_MAX_VALID and text == 0:
@@ -394,6 +458,20 @@ class Replay:
         self.tracker.reset()
     elif t - self.radar_t > SIGNAL_TIMEOUT:
       self.tracker.reset()
+
+  def on_state(self, t):
+    st = int(self.st)
+    if st == self.prev_st:
+      return
+    self.timeline.append({
+      'route': self.route, 't': t - (self.drive_t0 if self.drive_t0 is not None else t), 'frm': self.prev_st, 'to': st,
+      'mph': self.v_ego * MPH, 'op': bool(self.op), 'op_for': (t - self.op_t) if self.op_t is not None else None,
+      'tsk': self.tsk, 'ost': self.ost, 'txt': self.txt, 'txt4': self.txt4, 'brake': self.brake,
+      'presses': sorted(((name, t - pt) for name, pt in self.presses.items() if 0.0 <= t - pt <= BUTTON_WINDOW), key=lambda x: x[1]),
+      'dur': (t - self.prev_st_t) if self.prev_st_t is not None else None,
+    })
+    self.prev_st = st
+    self.prev_st_t = t
 
   def on_model(self, t, model):
     if len(model.leadsV3) < 2:
@@ -408,7 +486,7 @@ class Replay:
     self.rows.append((t, self.v_ego, float(self.op), self.raw, self.idx, self.st, self.acc,
                       trk[1] if trk else NAN, trk[2] if trk else NAN, lead.prob, vis_d, vis_v,
                       float(self.fusion.trusted), fused[0] if fused else NAN, fused[1] if fused else NAN, float(self.log_radar),
-                      self.obj, self.typ))
+                      self.obj, self.typ, self.op_accel, self.tsk, self.ost, self.txt))
     if lead.prob > FOLLOW_PROB and FOLLOW_D[0] < vis_d < FOLLOW_D[1] and self.v_ego > FOLLOW_V:
       if len(self.scan_addr) != len(self.bus2):
         for addr in self.bus2:
@@ -419,6 +497,7 @@ class Replay:
       self.scan_d.append(vis_d)
       self.scan_v.append(vis_v - self.v_ego)
       self.scan_e.append(self.v_ego)
+      self.scan_st.append(self.st if self.st == self.st else -1.0)
       self.scan_n += 1
 
   def read(self, events):
@@ -429,6 +508,8 @@ class Replay:
       if abs(t - self.last_t) > NEW_DRIVE_GAP:
         self.new_drive()
         self.last_t = t
+      if self.drive_t0 is None:
+        self.drive_t0 = t
       which = evt.which()
       if which == 'can':
         self.on_can(t, evt)
@@ -436,8 +517,13 @@ class Replay:
         self.on_model(t, evt.modelV2)
       elif which == 'carState':
         self.v_ego = evt.carState.vEgo
+        self.brake = evt.carState.brakePressed
       elif which == 'carControl':
-        self.op = evt.carControl.longActive
+        op = evt.carControl.longActive
+        if op != self.op:
+          self.op_t = t
+        self.op = op
+        self.op_accel = evt.carControl.actuators.accel
       elif which == 'radarState':
         self.log_radar = evt.radarState.leadOne.status and evt.radarState.leadOne.radar
       elif which == 'carParams':
@@ -493,17 +579,17 @@ def msg_names(op_dir):
   return {}
 
 
-def search(replay):
+def search(replay, sel=None, min_s=FOLLOW_MIN_S):
   """Looks through every message on the radar's bus for a number that follows the camera's distance to the car
   ahead (and one that follows the closing speed). Every run of 8, 10, 12 or 16 bits is tried. Our own speed is
   taken out first: at a steady time gap the distance follows our speed, and so would any copy of our speed.
   Returns {'d': [...], 'v': [...]}, best first: (score 0-1, address, first bit, bits, units per metre or m/s, offset,
   different values, signed)."""
-  n = replay.scan_n
-  if n * DT_MDL < FOLLOW_MIN_S:
+  pick = np.arange(replay.scan_n) if sel is None else np.flatnonzero(sel)
+  if len(pick) * DT_MDL < min_s:
     return None
-  step = max(1, n // 20000)
-  e = np.array(replay.scan_e)[::step]
+  pick = pick[::max(1, len(pick) // 20000)]
+  e = np.array(replay.scan_e)[pick]
   ec = e - e.mean()
   ee = float(ec @ ec)
 
@@ -513,12 +599,12 @@ def search(replay):
 
   out = {}
   for key, src, signed_too in (('d', replay.scan_d, False), ('v', replay.scan_v, True)):
-    target = np.array(src)[::step]
+    target = np.array(src)[pick]
     tr = without_speed(target[None])[0]
     tn = float(np.linalg.norm(tr))
     best = []
     for addr, arr in replay.scan_addr.items():
-      v = np.frombuffer(arr, dtype=np.uint64)[::step]
+      v = np.frombuffer(arr, dtype=np.uint64)[pick]
       if tn == 0 or v.min() == v.max():
         continue
       fields, meta = [], []
@@ -536,10 +622,14 @@ def search(replay):
         continue
       X = np.stack(fields)
       Xr = without_speed(X)
-      r = (Xr @ tr) / (np.linalg.norm(Xr, axis=1) * tn + 1e-9)
-      i = int(np.argmax(np.abs(r)))
-      slope, offset = (float(c) for c in np.polyfit(target, X[i], 1))
-      best.append((float(abs(r[i])), addr, meta[i][0], meta[i][1], slope, offset, len(np.unique(X[i])), meta[i][2]))
+      r = np.abs((Xr @ tr) / (np.linalg.norm(Xr, axis=1) * tn + 1e-9))
+      # the best field of this message that can be a reading at all: a flag or a few-step value is not a distance
+      for i in np.argsort(-r)[:32]:
+        kinds = len(np.unique(X[i]))
+        if kinds >= MIN_KINDS:
+          slope, offset = (float(c) for c in np.polyfit(target, X[i], 1))
+          best.append((float(r[i]), addr, meta[i][0], meta[i][1], slope, offset, kinds, meta[i][2]))
+          break
     out[key] = sorted(best, reverse=True)
   return out
 
@@ -627,7 +717,105 @@ def analyse(replay):
   R['acc_own'] = float(np.mean(a['acc'][drv3] < 3.0)) if drv3.sum() else NAN
   R['logged'] = pc((a['log_radar'] > 0).sum(), cam.sum())
   R['search'] = search(replay)
+
+  # ---- the radar while healthy (its ACC state 3, active) and when / why it faults
+  act = a['st'] == 3
+  R['state_s'] = dict(sorted(replay.state_time.items()))
+  R['act_follow_s'] = float((act & follow).sum()) * DT_MDL
+  bar_act = act & follow & bar
+  R['act_bar'] = pc(bar_act.sum(), (act & follow).sum())
+  R['act_idx'] = None
+  if bar_act.sum() >= 100 and np.std(a['idx'][bar_act]) > 0 and np.std(a['vis_d'][bar_act]) > 0:
+    x, y, e = a['vis_d'][bar_act], a['idx'][bar_act], a['v_ego'][bar_act]
+    s_, o_ = np.polyfit(x, y, 1)
+    R['act_idx'] = (float(s_), float(o_), float(np.corrcoef(x, y)[0, 1]), partial_corr(x, y, e), len(np.unique(y)))
+  m = act & (a['op'] > 0) & np.isfinite(a['acc']) & (a['acc'] < 3.0) & np.isfinite(a['op_acc'])
+  R['act_acc'] = None
+  if m.sum() >= 100 and np.std(a['acc'][m]) > 0 and np.std(a['op_acc'][m]) > 0:
+    R['act_acc'] = (float(np.corrcoef(a['acc'][m], a['op_acc'][m])[0, 1]), float(np.sqrt(np.mean((a['acc'][m] - a['op_acc'][m]) ** 2))),
+                    float(m.sum()) * DT_MDL)
+  R['search_act'] = search(replay, np.array(replay.scan_st) == 3, HEALTHY_MIN_S)
+
+  st_s = replay.state_time
+  R['msg_diff'] = []
+  if st_s.get(7, 0.0) > 30.0 and (st_s.get(2, 0.0) + st_s.get(3, 0.0)) > 30.0:
+    for addr in sorted(replay.bus2_n):
+      r = {k: replay.rate.get((addr, k), 0) / st_s[k] for k in (2, 3, 7) if st_s.get(k, 0.0) > 30.0}
+      healthy = max(r.get(2, 0.0), r.get(3, 0.0))
+      if max(healthy, r[7]) > 0.5 and (r[7] < 0.2 * healthy or healthy < 0.2 * r[7]):
+        R['msg_diff'].append((addr, r.get(2, NAN), r.get(3, NAN), r[7]))
+
+  tl = replay.timeline
+  R['tl'] = tl
+  R['faults'] = [x for x in tl if x['to'] in (6, 7) and x['frm'] not in (None, 6, 7)]
+  R['fault_at_start'] = [x for x in tl if x['frm'] is None and x['to'] in (6, 7)]
+  why = {'SET': 0, 'RES': 0, 'other button': 0, 'openpilot just engaged': 0, 'openpilot just disengaged': 0, 'brake': 0, 'nothing of these': 0}
+  for x in R['faults']:
+    names = [n for n, _ in x['presses']]
+    hit = False
+    for key in ('SET', 'RES'):
+      if key in names:
+        why[key] += 1
+        hit = True
+    if any(n not in ('SET', 'RES') for n in names):
+      why['other button'] += 1
+      hit = True
+    if x['op_for'] is not None and x['op_for'] <= BUTTON_WINDOW:
+      why['openpilot just engaged' if x['op'] else 'openpilot just disengaged'] += 1
+      hit = True
+    if x['brake']:
+      why['brake'] += 1
+      hit = True
+    if not hit:
+      why['nothing of these'] += 1
+  R['why'] = why
   return R
+
+
+def partial_corr(x, y, z):
+  """Correlation of x and y with z (our speed) taken out of both."""
+  def resid(v):
+    c = np.polyfit(z, v, 1) if np.std(z) > 0 else (0.0, float(np.mean(v)))
+    return v - (c[0] * z + c[1])
+  rx, ry = resid(x), resid(y)
+  return float(np.corrcoef(rx, ry)[0, 1]) if np.std(rx) > 0 and np.std(ry) > 0 else NAN
+
+
+def state_name(st):
+  return 'not seen yet' if st is None else ACC_STATUS.get(st, str(st))
+
+
+def clock(t):
+  return f"{int(t // 60)}:{int(t % 60):02d}"
+
+
+def transition_txt(x):
+  parts = [f"{x['mph']:.0f} mph", 'openpilot on' if x['op'] else 'openpilot off']
+  if x['dur'] is not None:
+    parts.insert(0, f"after {x['dur']:.1f} s {state_name(x['frm'])}")
+  if x['op_for'] is not None and x['op_for'] <= 30.0:
+    parts[-1] += f" (switched {x['op_for']:.1f} s before)"
+  parts += [f"{n} {d:.1f} s before" for n, d in x['presses']]
+  if x['brake']:
+    parts.append('brake pressed')
+  if x['tsk'] == x['tsk']:
+    parts.append(f"coordinator {TSK_STATUS.get(int(x['tsk']), int(x['tsk']))}")
+  if x['ost'] == x['ost']:
+    parts.append(f"openpilot sends {ACC_STATUS.get(int(x['ost']), int(x['ost']))}")
+  for key in ('txt', 'txt4'):
+    if x[key] == x[key] and int(x[key]):
+      parts.append(f"radar text {int(x[key])} '{RADAR_TEXT.get(int(x[key]), '?')}'" if key == 'txt' else f"ACC_04 text {int(x[key])}")
+  return (f"drive {rid(x['route'])} at {clock(x['t'])}: {state_name(x['frm'])} -> {state_name(x['to'])}, " + ', '.join(parts))
+
+
+def transition_tok(x):
+  t = (f"{rid(x['route'])}+{x['t']:.0f}:{'-' if x['frm'] is None else x['frm']}>{x['to']}"
+       + (f"/{x['dur']:.1f}" if x['dur'] is not None else '') + f"@{x['mph']:.0f},op{int(x['op'])}"
+       + (f"/{x['op_for']:.1f}" if x['op_for'] is not None and x['op_for'] <= 30.0 else '')
+       + (f",tsk{int(x['tsk'])}" if x['tsk'] == x['tsk'] else '') + (f",ost{int(x['ost'])}" if x['ost'] == x['ost'] else '')
+       + (f",t{int(x['txt'])}" if x['txt'] == x['txt'] else '') + (f"/{int(x['txt4'])}" if x['txt4'] == x['txt4'] else '')
+       + (',BRK' if x['brake'] else ''))
+  return t + ''.join(f",{n}{d:.1f}" for n, d in x['presses'])
 
 
 def verdict(R):
@@ -653,6 +841,22 @@ def verdict(R):
                      " the ACC_04 field stays empty and no other number on its bus tracks it. On this car the radar does not share"
                      " its target while openpilot drives, so the radar lead cannot work. With /data/radar_lead set nothing would"
                      " change: the lead stays the camera's.")
+
+
+def healthy_verdict(R):
+  best = R['search_act']['d'][0] if R['search_act'] and R['search_act']['d'] else None
+  if R['act_follow_s'] < HEALTHY_MIN_S:
+    return 'TOO-LITTLE', (f"only {R['act_follow_s']:.0f} s of driving behind a car while the radar was healthy ({HEALTHY_MIN_S:.0f} s needed),"
+                          " too little to say what a healthy radar could give.")
+  if best is not None and best[0] >= STRONG and best[1] != ACC_02:
+    return 'SIGNAL', (f"while healthy the radar does send a number that follows the car ahead ({best[1]:03X}, score {best[0]:.2f})."
+                      " Keeping it healthy is worth working on.")
+  ai = R['act_idx']
+  if ai is not None and ai[3] >= 0.8 and ai[0] > 0:
+    return 'BAR-ONLY', (f"while healthy, only the cluster's lead bar follows the car ahead, in {ai[4]} steps of about {1.0 / ai[0]:.1f} m."
+                        " That is the only distance a healthy radar would add.")
+  return 'NOTHING', ("even while healthy, nothing the radar sends follows the car ahead closely: keeping it alive would not give"
+                     " openpilot a distance.")
 
 
 def state_txt(pairs, n):
@@ -720,9 +924,51 @@ def report(R, names, branch, file_now, msgs):
       say(f"   lead speed beyond 60 m ({R['jit'][2]:.0f} s): the camera's jumps by {R['jit'][0]:.2f} m/s2 frame to frame, with the radar {R['jit'][1]:.2f}")
     if R['logged'] not in ('n/a', '0%'):
       say(f"   in these drives the radar lead was on: the planner's lead distance came from the radar {R['logged']} of the time")
+  say()
+  say("6. WHEN AND WHY THE RADAR'S OWN CRUISE CONTROL FAULTS")
+  say('   time in each state: ' + ', '.join(f"{state_name(k) if k >= 0 else 'no ACC_06'} {v / 60.0:.1f} min" for k, v in R['state_s'].items()))
+  if R['fault_at_start']:
+    say(f"   already faulted the first time it was seen in {len(R['fault_at_start'])} drive(s)")
+  if not R['faults']:
+    say('   no change into a fault in these drives')
+  else:
+    say(f"   it went into a fault {len(R['faults'])} times. What was going on (up to {BUTTON_WINDOW:.0f} s before):")
+    say('     ' + ', '.join(f"{k} {v}" for k, v in R['why'].items() if v))
+    act_dur = [x['dur'] for x in R['faults'] if x['frm'] == 3 and x['dur'] is not None]
+    if act_dur:
+      say(f"     time it had been active when it faulted: {', '.join(f'{d:.1f}' for d in sorted(act_dur)[:12])} s")
+    shown = 0
+    for i, x in enumerate(R['tl']):
+      if x in R['faults'] and shown < 12:
+        if i > 0 and R['tl'][i - 1]['route'] == x['route'] and R['tl'][i - 1] not in R['faults']:
+          say('     before: ' + transition_txt(R['tl'][i - 1]))
+        say('     FAULT:  ' + transition_txt(x))
+        shown += 1
+  say()
+  say("7. WHAT THE RADAR SENDS WHILE IT IS HEALTHY (its cruise control active, driving behind a car)")
+  say(f"   {R['act_follow_s'] / 60.0:.1f} min of that in these drives")
+  say(f"   lead bar (ACC_02) filled in {R['act_bar']} of it")
+  if R['act_idx'] is not None:
+    sl, of, cr, pcr, kinds = R['act_idx']
+    say(f"   the bar against the camera: {sl:.3f} per metre {of:+.1f}, correlation {cr:.2f}, with our speed taken out {pcr:.2f}, {kinds} different values")
+  if R['act_acc'] is not None:
+    say(f"   its own accel request against openpilot's: correlation {R['act_acc'][0]:.2f},"
+        f" they differ by {R['act_acc'][1]:.2f} m/s2 (rms) over {R['act_acc'][2]:.0f} s")
+  if R['search_act'] is None:
+    say(f"   search on these stretches only: needs {HEALTHY_MIN_S:.0f} s, there are {R['act_follow_s']:.0f} s")
+  else:
+    say("   search on these stretches only, the distance to the car ahead:")
+    for hit in R['search_act']['d'][:3]:
+      say('     ' + field_txt(hit, msgs, 'm'))
+  if R['msg_diff']:
+    say("   messages that come and go with the radar's health (per second: standby / active / fault):")
+    for addr, r2, r3, r7 in R['msg_diff'][:8]:
+      say(f"     {msgs.get(addr, '?'):12s} 0x{addr:03X}: {r2:5.1f} / {r3:5.1f} / {r7:5.1f}")
   code, text = verdict(R)
+  hcode, htext = healthy_verdict(R)
   say()
   say('VERDICT: ' + text)
+  say('HEALTHY RADAR: ' + htext)
   say()
   say('PASTE THIS BLOCK BACK:')
   moved = ' '.join(f"{lo}-{hi}:{med:+.1f}/{p90:.1f}" for lo, hi, _, med, p90 in R['moved']) or 'none'
@@ -737,7 +983,7 @@ def report(R, names, branch, file_now, msgs):
     return ' '.join(f"{a:03X}/{b}+{s}{'s' if sg else ''}={sc:.2f}({sl:+.2f},{of:+.0f},{kn})"
                     for sc, a, b, s, sl, of, kn, sg in R['search'][key][:k]) if R['search'] else 'n/a'
 
-  say(f"mk7_radar_check v{TOOL_VERSION.split()[0]} drives={','.join(names)} branch={branch} file={file_now} verdict={code}")
+  say(f"mk7_radar_check v{TOOL_VERSION.split()[0]} drives={','.join(names)} branch={branch} file={file_now} verdict={code} healthy={hcode}")
   say(f"min={R['min']:.1f} moving={R['moving_min']:.1f} op={R['op_min']:.1f} follow={R['follow_s']:.0f}s bus2_msgs={R['bus2']} acc04_hz={R['hz']:.0f}"
       f" dist={R['dist']} free={R['free']} nodisp={R['nodisp']} zero={R['zero']}")
   say(f"acc04 kinds={R['a04_kinds']} top={R['a04_top']}({R['a04_top_share']}) changed={R['a04_changed']}"
@@ -748,6 +994,16 @@ def report(R, names, branch, file_now, msgs):
       f" trusted={R['trusted']} first={R['first_trust']:.0f}s fused={R['fused']} moved[m]={moved} jit60={jit} logged={R['logged']}")
   say(f"search_d={hits('d', 5)}")
   say(f"search_v={hits('v', 3)}")
+  say(f"states={','.join(f'{k}:{v / 60.0:.1f}' for k, v in R['state_s'].items())} faults={len(R['faults'])} at_start={len(R['fault_at_start'])}"
+      f" why={','.join(f'{WHY_TOK[k]}{v}' for k, v in R['why'].items() if v)}")
+  say('tl=' + ' '.join(transition_tok(x) for x in R['tl'][:24]) + (f" (+{len(R['tl']) - 24})" if len(R['tl']) > 24 else ''))
+  ai = R['act_idx']
+  aa = R['act_acc']
+  say(f"healthy={R['act_follow_s']:.0f}s bar={R['act_bar']}" + (f" idx={ai[0]:.3f}/{ai[1]:+.1f}/{ai[2]:.2f}/{ai[3]:.2f}/{ai[4]}" if ai else ' idx=n/a')
+      + (f" acc={aa[0]:.2f}/{aa[1]:.2f}/{aa[2]:.0f}s" if aa else ' acc=n/a')
+      + ' search_act=' + (' '.join(f"{a_:03X}/{b}+{s_}={sc:.2f}({sl:+.2f},{of:+.0f},{kn})" for sc, a_, b, s_, sl, of, kn, _ in R['search_act']['d'][:3])
+                          if R['search_act'] else 'n/a')
+      + ' msgs=' + (' '.join(f"{a_:03X}:{r2:.0f}/{r3:.0f}/{r7:.0f}" for a_, r2, r3, r7 in R['msg_diff'][:8]) or 'none'))
   return code
 
 
@@ -784,6 +1040,7 @@ def main():
   for route, seg_nums in picked:
     files = [f for f in (seg_file(args.log_root, route, n) for n in seg_nums) if f]
     say(f"reading drive {rid(route)}: {len(files)} of {len(seg_nums)} minutes have a full log (rlog)")
+    replay.route = route
     for f in files:
       replay.read(events_of(zstd, log, f))
   if not replay.rows:

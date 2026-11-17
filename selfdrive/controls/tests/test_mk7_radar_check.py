@@ -179,3 +179,40 @@ def test_replay_survives_out_of_order_stamps(monkeypatch):
   assert len(replay.rows) == 401
   assert all(v == 20.0 for v in v_ego[:400]) and all(o == 1.0 for o in op[:400])
   assert v_ego[400] == 0.0 and op[400] == 0.0                   # the new drive did start from scratch
+
+
+def test_fault_timeline():
+  packer = CANPacker(DBC[CAR.VOLKSWAGEN_GOLF_MK7][Bus.pt])
+
+  def can(t, frames):
+    e = log.Event.new_message(logMonoTime=int(t * 1e9))
+    cans = e.init('can', len(frames))
+    for c, (addr, dat, bus) in zip(cans, frames, strict=True):
+      c.address, c.dat, c.src = addr, dat, bus
+    return e
+
+  def state(t, radar_state, set_pressed=False, tsk=3):
+    return can(t, [packer.make_can_msg("ACC_06", 2, {"ACC_Status_ACC": radar_state}),
+                   packer.make_can_msg("ACC_02", 2, {"ACC_Texte_Primaeranz": 56 if radar_state == 7 else 10}),
+                   packer.make_can_msg("TSK_06", 0, {"TSK_Status": tsk}),
+                   packer.make_can_msg("GRA_ACC_01", 0, {"GRA_Tip_Setzen": int(set_pressed)})])
+
+  events = [log.Event.new_message(logMonoTime=int(100e9), carControl={'longActive': False})]
+  events += [state(100.0 + i * 0.02, 2) for i in range(100)]                       # standby for 2 s
+  events.append(log.Event.new_message(logMonoTime=int(102.0e9), carControl={'longActive': True}))
+  events += [state(102.0 + i * 0.02, 2, set_pressed=i < 5) for i in range(10)]    # SET pressed and released
+  events += [state(102.2 + i * 0.02, 3) for i in range(200)]                       # active for 4 s
+  events += [state(106.2 + i * 0.02, 7, tsk=3) for i in range(100)]                # then the fault
+
+  replay = tool.Replay()
+  replay.route = '00000020--dddddddddd'
+  replay.read(events)
+  tl = replay.timeline
+  assert [(x['frm'], x['to']) for x in tl] == [(None, 2), (2, 3), (3, 7)]
+  went_active, fault = tl[1], tl[2]
+  assert went_active['op'] and went_active['op_for'] == pytest.approx(0.2, abs=0.03)
+  assert [n for n, _ in went_active['presses']] == ['SET'] and went_active['presses'][0][1] == pytest.approx(0.2, abs=0.03)
+  assert fault['dur'] == pytest.approx(4.0, abs=0.03) and fault['t'] == pytest.approx(6.2, abs=0.03)
+  assert fault['presses'] == [] and fault['tsk'] == 3 and fault['txt'] == 10   # the radar's text in the frame before its fault state
+  assert replay.state_time[2] == pytest.approx(2.2, abs=0.05) and replay.state_time[3] == pytest.approx(4.0, abs=0.05)
+  assert 'SET' in tool.transition_tok(went_active) and '3>7/4.0' in tool.transition_tok(fault)
