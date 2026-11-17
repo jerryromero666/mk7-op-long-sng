@@ -160,6 +160,141 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
   }
 
 
+# *** range-only radar (VW MQB) ***
+# The MQB radar reports the distance to its selected lead and nothing else (opendbc volkswagen/radar_interface.py).
+# Live: /data/radar_lead, re-read about once a second. "1" = the distance of the camera's lead comes from the radar.
+# No file, or anything else: off, the lead is the camera's alone (as before this existed).
+RADAR_LEAD_FILE = '/data/radar_lead'
+RADAR_LEAD_PERIOD = 20   # updates between file reads (1 Hz at 20 Hz)
+
+
+def read_radar_lead_on() -> bool:
+  try:
+    with open(RADAR_LEAD_FILE) as f:
+      return float(f.read().strip()) == 1.0
+  except (OSError, ValueError):
+    return False
+
+
+class RadarTrustGate:
+  """
+  Decides whether the range-only radar may be used at all.
+
+  The distance is a signal the radar broadcasts for the instrument cluster. Whether it is live,
+  and in metres, on a given car is only knowable from the car, so it has to earn trust on every
+  drive: while the camera is sure about a lead, the radar distance must agree with it for a
+  sustained period. Until then, and whenever agreement is lost, the radar is ignored.
+  """
+  MIN_VISION_PROB = 0.9      # only compare when the camera is sure there is a lead
+  MIN_COMPARE_DIST = 8.      # m, up close any small number looks right: a mis-scaled signal would pass
+  MAX_COMPARE_DIST = 60.     # m, the camera's range is too loose beyond this to judge the radar
+  MIN_COMPARE_TIME = 10.     # s of comparison before trust can be granted
+  SCORE_TAU = 5.             # s
+  TRUST_SCORE = 0.8          # agreement fraction to become trusted
+  DISTRUST_SCORE = 0.5       # agreement fraction below which trust is withdrawn
+
+  def __init__(self):
+    self.score = FirstOrderFilter(0., self.SCORE_TAU, DT_MDL)
+    self.compare_frames = 0
+    self.trusted = False
+
+  def update(self, track: Track | None, lead_msg: capnp._DynamicStructReader) -> bool:
+    if track is None or lead_msg.prob < self.MIN_VISION_PROB:
+      return self.trusted
+
+    vision_dist = lead_msg.x[0] - RADAR_TO_CAMERA
+    if not self.MIN_COMPARE_DIST <= vision_dist <= self.MAX_COMPARE_DIST:
+      return self.trusted
+
+    agree = abs(track.dRel - vision_dist) < max(0.2 * vision_dist, 3.0)
+    self.score.update(float(agree))
+    self.compare_frames += 1
+
+    if self.trusted and self.score.x < self.DISTRUST_SCORE:
+      self.trusted = False
+      cloudlog.warning(f"radard: radar distance no longer agrees with the camera, ignoring it (score {self.score.x:.2f})")
+    elif not self.trusted and self.compare_frames * DT_MDL >= self.MIN_COMPARE_TIME and self.score.x >= self.TRUST_SCORE:
+      self.trusted = True
+      cloudlog.info(f"radard: radar distance agrees with the camera (score {self.score.x:.2f})")
+
+    return self.trusted
+
+
+class RangeRadarFusion:
+  """
+  Lead selection with a radar that reports range to its one selected lead and nothing else.
+
+  The radar never adds or removes a lead here: there is a lead exactly when the camera has one,
+  so everything that reacts to a lead appearing or dropping out behaves as it does camera-only.
+  The radar corrects what the camera is loose on:
+    * distance comes from the radar
+    * lead speed stays the camera's up close, where it sees a lead change speed first; the
+      radar, whose speed is differentiated from a 1 m signal (steady and unbiased, but up to a
+      second late on a braking lead), only trims its slow error. Far away, where the camera
+      misjudges speed, the radar's is used; blended in between
+    * lead accel stays the camera's
+  A radar object counts once the camera has seen the same car, and from then on also while the
+  two disagree with the radar reading closer (the cautious side).
+  """
+  SPEED_BIAS_TAU = 5.        # s, how slowly the radar trims the camera's lead speed up close
+  SPEED_BIAS_MAX = 2.        # m/s
+  FAR_BP = [30., 60.]        # m: camera speed (trimmed) below, radar speed above
+
+  def __init__(self):
+    self.gate = RadarTrustGate()
+    self.on = False
+    self.frame = 0
+    self.speed_bias: dict[int, FirstOrderFilter] = {}
+    self.speed_bias_track: dict[int, int] = {}
+    self.confirmed_track: dict[int, int] = {}
+
+  def update(self, ready: bool, track: Track | None, lead_msg: capnp._DynamicStructReader) -> None:
+    if self.frame % RADAR_LEAD_PERIOD == 0:
+      self.on = read_radar_lead_on()
+    self.frame += 1
+    if ready:
+      self.gate.update(track, lead_msg)
+
+  def _speed_bias(self, idx: int, track: Track, vision_v_lead: float) -> float:
+    if self.speed_bias_track.get(idx) != track.identifier:
+      self.speed_bias[idx] = FirstOrderFilter(0., self.SPEED_BIAS_TAU, DT_MDL)
+      self.speed_bias_track[idx] = track.identifier
+    error = float(np.clip(track.vLead - vision_v_lead, -self.SPEED_BIAS_MAX, self.SPEED_BIAS_MAX))
+    return float(self.speed_bias[idx].update(error))
+
+  def get_lead(self, idx: int, v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
+               model_v_ego: float) -> dict[str, Any]:
+    if not (ready and lead_msg.prob > .5):
+      self.confirmed_track.pop(idx, None)
+      return {'status': False}
+
+    lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
+    track = next(iter(tracks.values()), None)
+    if not self.on or not self.gate.trusted or track is None:
+      self.confirmed_track.pop(idx, None)
+      return lead_dict
+
+    same_car = match_vision_to_track(v_ego, lead_msg, tracks) is not None
+    confirmed = self.confirmed_track.get(idx) == track.identifier
+    if not (same_car or (confirmed and track.dRel < lead_dict['dRel'])):
+      self.confirmed_track.pop(idx, None)
+      return lead_dict
+
+    self.confirmed_track[idx] = track.identifier
+    far = float(np.interp(track.dRel, self.FAR_BP, [0., 1.]))
+    v_near = lead_dict['vLead'] + self._speed_bias(idx, track, lead_dict['vLead'])
+    v_lead = (1. - far) * v_near + far * track.vLead
+    lead_dict.update({
+      "dRel": float(track.dRel),
+      "vRel": float(v_lead - v_ego),
+      "vLead": float(v_lead),
+      "vLeadK": float(v_lead),
+      "radar": True,
+      "radarTrackId": track.identifier,
+    })
+    return lead_dict
+
+
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, CP: structs.CarParams, CP_SP: structs.CarParamsSP, low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
@@ -215,6 +350,9 @@ class RadarD:
 
     self.ready = False
 
+    # VW's radar only reports range to its selected lead; it counts only with /data/radar_lead (RangeRadarFusion)
+    self.range_fusion = RangeRadarFusion() if CP.brand == "volkswagen" else None
+
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
     self.current_time = 1e-9*max(sm.logMonoTime.values())
@@ -255,7 +393,11 @@ class RadarD:
     else:
       model_v_ego = self.v_ego
     leads_v3 = sm['modelV2'].leadsV3
-    if len(leads_v3) > 1:
+    if len(leads_v3) > 1 and self.range_fusion is not None:
+      self.range_fusion.update(self.ready, next(iter(self.tracks.values()), None), leads_v3[0])
+      self.radar_state.leadOne = self.range_fusion.get_lead(0, self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego)
+      self.radar_state.leadTwo = self.range_fusion.get_lead(1, self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego)
+    elif len(leads_v3) > 1:
       self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.CP, self.CP_SP, low_speed_override=True)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.CP, self.CP_SP, low_speed_override=False)
 
