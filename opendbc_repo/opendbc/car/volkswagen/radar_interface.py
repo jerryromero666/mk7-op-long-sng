@@ -1,7 +1,8 @@
 """
 MQB front radar lead interface.
 
-The MQB ACC radar (Bosch MRR, behind the front emblem) does not put raw tracks on any bus the
+The MQB ACC radar (Bosch MRR; in the lower grille on the Mk7, behind the front emblem from the
+Mk7.5 on) does not put raw tracks on any bus the
 comma can reach. What it does broadcast, on the extended CAN next to its ACC control messages,
 is the distance to the object it has selected as the in-path lead: ACC_04.ACC_Abstand_Abstandswarner,
 whole metres, produced by Front Assist whether or not the radar's own ACC is engaged. That is
